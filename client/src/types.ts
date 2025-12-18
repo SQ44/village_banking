@@ -1,0 +1,221 @@
+export type TransactionType =
+  | "deposit"
+  | "withdrawal"
+  | "loan_disbursement"
+  | "loan_repayment"
+  | "interest"
+  | "fee";
+
+export type TransactionStatus = "pending" | "completed" | "failed";
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+}
+
+export interface User {
+  id: number;
+  email: string;
+  full_name?: string;
+  role: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SavingsProduct {
+  id: number;
+  name: string;
+  description?: string;
+  interest_rate: number;
+  compounding_days: number;
+  min_balance: number;
+  custom_fields: Record<string, any>;
+}
+
+export interface Account {
+  id: number;
+  name: string;
+  email?: string;
+  group_name?: string;
+  group_id?: number;
+  user_id?: number;
+  product_id?: number;
+  balance: number;
+  last_withdrawal_at?: string | null;
+  custom_fields: Record<string, any>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AccountPayload {
+  name: string;
+  email?: string;
+  group_name?: string;
+  group_id?: number;
+  product_id?: number;
+  initial_deposit?: number;
+  custom_fields?: Record<string, any>;
+}
+
+export interface Transaction {
+  id: number;
+  account_id: number;
+  amount: number;
+  type: TransactionType;
+  status: TransactionStatus;
+  description?: string;
+  custom_fields: Record<string, any>;
+  created_at: string;
+}
+
+export interface TransactionPayload {
+  account_id: number;
+  amount: number;
+  type: TransactionType;
+  description?: string;
+  status?: TransactionStatus;
+  custom_fields?: Record<string, any>;
+  use_lenco?: boolean;
+}
+
+export interface DashboardStats {
+  member_count: number;
+  total_balance: number;
+  pending_transactions: number;
+}
+
+export type MembershipRole = "admin" | "member";
+
+export interface Group {
+  id: number;
+  name: string;
+  terms: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GroupSettings {
+  group_id: number;
+  min_monthly_contribution: number;
+  admin_fee_percent: number;
+  loan_interest_percent: number;
+  enforce_loan_limit: boolean;
+  loan_limit_multiplier: number;
+  withdrawal_cycle_days: number;
+  allow_advance_contribution: boolean;
+  custom_fields: Record<string, any>;
+}
+
+export interface GroupWithSettings extends Group {
+  settings: GroupSettings;
+}
+
+export interface GroupCreatePayload {
+  name: string;
+  terms?: string;
+}
+
+export interface GroupSettingsUpdatePayload {
+  min_monthly_contribution?: number;
+  admin_fee_percent?: number;
+  loan_interest_percent?: number;
+  enforce_loan_limit?: boolean;
+  loan_limit_multiplier?: number;
+  withdrawal_cycle_days?: number;
+  allow_advance_contribution?: boolean;
+  custom_fields?: Record<string, any>;
+}
+
+export interface Membership {
+  id: number;
+  group_id: number;
+  user_id: number;
+  account_id?: number | null;
+  role: MembershipRole;
+  accepted_terms_at?: string | null;
+  joined_at: string;
+  is_active: boolean;
+}
+
+export interface MemberInvitePayload {
+  email: string;
+  full_name?: string;
+  password: string;
+  name: string;
+  min_initial_deposit?: number;
+  custom_fields?: Record<string, any>;
+}
+
+export type RepaymentFrequency = "weekly" | "monthly";
+export type LoanStatus = "active" | "closed";
+
+export interface Loan {
+  id: number;
+  group_id: number;
+  borrower_account_id: number;
+  principal: number;
+  interest_rate_percent: number;
+  admin_fee_percent: number;
+  term_months: number;
+  repayment_frequency: RepaymentFrequency;
+  outstanding_principal: number;
+  outstanding_interest: number;
+  status: LoanStatus;
+  created_at: string;
+  disbursed_at: string;
+  closed_at?: string | null;
+  custom_fields: Record<string, any>;
+}
+
+export interface LoanCreatePayload {
+  borrower_account_id: number;
+  principal: number;
+  term_months?: number;
+  repayment_frequency?: RepaymentFrequency;
+  interest_rate_percent?: number;
+  description?: string;
+}
+
+export type InstallmentStatus = "due" | "paid";
+
+export interface LoanInstallment {
+  id: number;
+  loan_id: number;
+  sequence: number;
+  due_date: string;
+  principal_due: number;
+  interest_due: number;
+  status: InstallmentStatus;
+  paid_at?: string | null;
+}
+
+export interface LoanRepaymentPayload {
+  amount: number;
+  interest_component?: number;
+  principal_component?: number;
+  description?: string;
+}
+
+export interface MemberSummary {
+  group_id?: number | null;
+  account?: Account | null;
+  savings_balance: number;
+  interest_earned: number;
+  loan_outstanding: number;
+  active_loan_count: number;
+}
+
+export interface InterestPreview {
+  account_id: number;
+  projected_amount: number;
+  starts_on: string;
+  ends_on: string;
+  annual_rate: number;
+}
+
+export interface InterestRequest {
+  account_id: number;
+  start: string;
+  end: string;
+}
