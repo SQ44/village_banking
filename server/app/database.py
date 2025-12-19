@@ -24,15 +24,42 @@ def _sqlite_table_exists(conn, table: str) -> bool:
 def _migrate_sqlite() -> None:
     """Best-effort SQLite migrations for legacy schemas (no Alembic yet)."""
     with engine.begin() as conn:
-        if not _sqlite_table_exists(conn, "account"):
-            return
-        cols = _sqlite_columns(conn, "account")
-        if "group_id" not in cols:
-            conn.execute(text("ALTER TABLE account ADD COLUMN group_id INTEGER"))
-        if "user_id" not in cols:
-            conn.execute(text("ALTER TABLE account ADD COLUMN user_id INTEGER"))
-        if "last_withdrawal_at" not in cols:
-            conn.execute(text("ALTER TABLE account ADD COLUMN last_withdrawal_at DATETIME"))
+        if _sqlite_table_exists(conn, "account"):
+            cols = _sqlite_columns(conn, "account")
+            if "group_id" not in cols:
+                conn.execute(text("ALTER TABLE account ADD COLUMN group_id INTEGER"))
+            if "user_id" not in cols:
+                conn.execute(text("ALTER TABLE account ADD COLUMN user_id INTEGER"))
+            if "last_withdrawal_at" not in cols:
+                conn.execute(text("ALTER TABLE account ADD COLUMN last_withdrawal_at DATETIME"))
+
+        # Group constitution / settings migrations.
+        if _sqlite_table_exists(conn, "groupsettings"):
+            cols = _sqlite_columns(conn, "groupsettings")
+            if "liquidity_max_outstanding_percent" not in cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE groupsettings ADD COLUMN liquidity_max_outstanding_percent FLOAT NOT NULL DEFAULT 80"
+                    )
+                )
+            if "min_term_months" not in cols:
+                conn.execute(text("ALTER TABLE groupsettings ADD COLUMN min_term_months INTEGER NOT NULL DEFAULT 1"))
+            if "max_term_months" not in cols:
+                conn.execute(text("ALTER TABLE groupsettings ADD COLUMN max_term_months INTEGER NOT NULL DEFAULT 12"))
+            if "max_active_loans_per_member" not in cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE groupsettings ADD COLUMN max_active_loans_per_member INTEGER NOT NULL DEFAULT 1"
+                    )
+                )
+            if "cooldown_days_after_settlement" not in cols:
+                conn.execute(
+                    text(
+                        "ALTER TABLE groupsettings ADD COLUMN cooldown_days_after_settlement INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
+            if "constitution_locked_at" not in cols:
+                conn.execute(text("ALTER TABLE groupsettings ADD COLUMN constitution_locked_at DATETIME"))
 
 
 def init_db() -> None:

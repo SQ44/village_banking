@@ -43,12 +43,18 @@ import type {
   GroupSettingsUpdatePayload,
   GroupWithSettings,
   Loan,
+  LoanBoardItem,
   LoanCreatePayload,
   LoanRepaymentPayload,
   MemberInvitePayload,
+  MemberForecast,
+  MemberLoanForecast,
   MemberSummary,
+  GroupContributionItem,
   Transaction,
   User,
+  LoanRequest,
+  LoanRequestCreatePayload,
 } from "./types";
 
 const TOKEN_STORAGE_KEY = "vb_token";
@@ -266,6 +272,7 @@ function AdminWorkspace({
   const [groupDetails, setGroupDetails] = useState<GroupWithSettings | null>(null);
   const [members, setMembers] = useState<Account[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
+  const [loanRequests, setLoanRequests] = useState<LoanRequest[]>([]);
   const [tab, setTab] = useState(0);
   const [busy, setBusy] = useState(false);
 
@@ -302,17 +309,20 @@ function AdminWorkspace({
         setGroupDetails(null);
         setMembers([]);
         setLoans([]);
+        setLoanRequests([]);
         return;
       }
       setSelectedGroupId(resolved);
-      const [details, accounts, groupLoans] = await Promise.all([
+      const [details, accounts, groupLoans, requests] = await Promise.all([
         Api.getGroup(resolved),
         Api.getGroupAccounts(resolved),
         Api.getGroupLoans(resolved),
+        Api.listLoanRequests(resolved),
       ]);
       setGroupDetails(details);
       setMembers(accounts);
       setLoans(groupLoans);
+      setLoanRequests(requests);
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to load admin workspace");
     } finally {
@@ -351,6 +361,79 @@ function AdminWorkspace({
     []
   );
 
+  const memberNameByAccountId = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const m of members) {
+      map.set(Number(m.id), m.name);
+    }
+    return map;
+  }, [members]);
+
+  const constitutionLocked = Boolean(groupDetails?.settings?.constitution_locked_at);
+
+  const requestColumns: GridColDef<LoanRequest>[] = useMemo(
+    () => [
+      { field: "id", headerName: "Request", width: 110 },
+      {
+        field: "borrower_account_id",
+        headerName: "Member",
+        flex: 1,
+        minWidth: 180,
+        valueGetter: (_, row) => memberNameByAccountId.get(Number(row.borrower_account_id)) ?? `Account ${row.borrower_account_id}`,
+      },
+      { field: "principal", headerName: "Principal", width: 140, valueFormatter: (v) => currency(Number(v)) },
+      { field: "term_months", headerName: "Term", width: 110, valueFormatter: (v) => `${Number(v)} mo` },
+      { field: "repayment_frequency", headerName: "Frequency", width: 130 },
+      { field: "status", headerName: "Status", width: 120 },
+      {
+        field: "scorecard",
+        headerName: "Scorecard",
+        width: 130,
+        sortable: false,
+        filterable: false,
+        renderCell: ({ row }) => {
+          const scorecard = row.custom_fields?.scorecard;
+          if (!scorecard) return null;
+          return (
+            <Button size="small" variant="outlined" onClick={() => window.alert(JSON.stringify(scorecard, null, 2))}>
+              View
+            </Button>
+          );
+        },
+      },
+      {
+        field: "approved_loan_id",
+        headerName: "Loan",
+        width: 110,
+        valueGetter: (_, row) => (row.custom_fields?.approved_loan_id ? `#${row.custom_fields.approved_loan_id}` : ""),
+      },
+      { field: "decision_reason", headerName: "Reason", flex: 1, minWidth: 220, valueGetter: (_, row) => row.decision_reason ?? "" },
+      {
+        field: "scorecard",
+        headerName: "Scorecard",
+        width: 130,
+        sortable: false,
+        filterable: false,
+        renderCell: ({ row }) => {
+          const scorecard = row.custom_fields?.scorecard;
+          if (!scorecard) return null;
+          return (
+            <Button size="small" variant="outlined" onClick={() => window.alert(JSON.stringify(scorecard, null, 2))}>
+              View
+            </Button>
+          );
+        },
+      },
+      {
+        field: "created_at",
+        headerName: "Requested",
+        width: 170,
+        valueFormatter: (v) => (v ? new Date(String(v)).toLocaleString() : "—"),
+      },
+    ],
+    [memberNameByAccountId]
+  );
+
   const saveSettings = async (updates: GroupSettingsUpdatePayload) => {
     if (!selectedGroupId) return;
     try {
@@ -358,6 +441,16 @@ function AdminWorkspace({
       setGroupDetails((prev) => (prev ? { ...prev, settings: updated } : prev));
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to save settings");
+    }
+  };
+
+  const lockConstitution = async () => {
+    if (!selectedGroupId) return;
+    try {
+      const updated = await Api.lockGroupConstitution(Number(selectedGroupId));
+      setGroupDetails((prev) => (prev ? { ...prev, settings: updated } : prev));
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to lock constitution");
     }
   };
 
@@ -420,11 +513,19 @@ function AdminWorkspace({
               <Grid item xs={12} md={4}>
                 <StatCard label="Active Loans" value={`${loans.filter((l) => l.status === "active").length}`} icon={<CreditCardIcon color="action" />} />
               </Grid>
+              <Grid item xs={12} md={4}>
+                <StatCard
+                  label="Pending Requests"
+                  value={`${loanRequests.filter((r) => r.status === "requested" || r.status === "queued").length}`}
+                  icon={<CreditCardIcon color="action" />}
+                />
+              </Grid>
             </Grid>
 
             <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
               <Tab label="Members" />
               <Tab label="Loans" />
+              <Tab label="Requests" />
               <Tab label="Settings" />
             </Tabs>
 
@@ -470,7 +571,33 @@ function AdminWorkspace({
               </Card>
             )}
 
-            {tab === 2 && groupDetails && <SettingsPanel group={groupDetails} onSave={saveSettings} busy={busy} />}
+            {tab === 2 && (
+              <Card variant="outlined">
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Loan requests
+                  </Typography>
+                  <Alert severity="info" sx={{ mb: 2 }}>
+                    {constitutionLocked
+                      ? "Autonomous lending is enabled. Requests are auto-approved, rejected, or queued by the constitution."
+                      : "Lock the constitution in Settings to enable autonomous lending (members cannot request loans before it is locked)."}
+                  </Alert>
+                  <Box height={420}>
+                    <DataGrid
+                      rows={loanRequests}
+                      columns={requestColumns}
+                      disableRowSelectionOnClick
+                      loading={busy}
+                      getRowId={(row) => row.id}
+                      pageSizeOptions={[10, 25, 50]}
+                      initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } } }}
+                    />
+                  </Box>
+                </CardContent>
+              </Card>
+            )}
+
+            {tab === 3 && groupDetails && <SettingsPanel group={groupDetails} onSave={saveSettings} onLockConstitution={lockConstitution} busy={busy} />}
           </>
         )}
       </Container>
@@ -611,10 +738,12 @@ function AdminWorkspace({
 function SettingsPanel({
   group,
   onSave,
+  onLockConstitution,
   busy,
 }: {
   group: GroupWithSettings;
   onSave: (p: GroupSettingsUpdatePayload) => Promise<void> | void;
+  onLockConstitution: () => Promise<void> | void;
   busy: boolean;
 }) {
   const [draft, setDraft] = useState<GroupSettingsUpdatePayload>(() => ({
@@ -623,6 +752,11 @@ function SettingsPanel({
     loan_interest_percent: group.settings.loan_interest_percent,
     enforce_loan_limit: group.settings.enforce_loan_limit,
     loan_limit_multiplier: group.settings.loan_limit_multiplier,
+    liquidity_max_outstanding_percent: group.settings.liquidity_max_outstanding_percent,
+    min_term_months: group.settings.min_term_months,
+    max_term_months: group.settings.max_term_months,
+    max_active_loans_per_member: group.settings.max_active_loans_per_member,
+    cooldown_days_after_settlement: group.settings.cooldown_days_after_settlement,
     withdrawal_cycle_days: group.settings.withdrawal_cycle_days,
     allow_advance_contribution: group.settings.allow_advance_contribution,
   }));
@@ -634,10 +768,17 @@ function SettingsPanel({
       loan_interest_percent: group.settings.loan_interest_percent,
       enforce_loan_limit: group.settings.enforce_loan_limit,
       loan_limit_multiplier: group.settings.loan_limit_multiplier,
+      liquidity_max_outstanding_percent: group.settings.liquidity_max_outstanding_percent,
+      min_term_months: group.settings.min_term_months,
+      max_term_months: group.settings.max_term_months,
+      max_active_loans_per_member: group.settings.max_active_loans_per_member,
+      cooldown_days_after_settlement: group.settings.cooldown_days_after_settlement,
       withdrawal_cycle_days: group.settings.withdrawal_cycle_days,
       allow_advance_contribution: group.settings.allow_advance_contribution,
     });
   }, [group]);
+
+  const locked = Boolean(group.settings.constitution_locked_at);
 
   return (
     <Card variant="outlined">
@@ -645,12 +786,18 @@ function SettingsPanel({
         <Typography variant="h6" gutterBottom>
           Group settings
         </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          {locked
+            ? `Constitution locked at ${new Date(String(group.settings.constitution_locked_at)).toLocaleString()}. Settings are immutable for this cycle.`
+            : "Set the constitution for this cycle, then lock it to enable autonomous lending."}
+        </Typography>
         <Grid container spacing={2}>
           <Grid item xs={12} md={6}>
             <TextField
               label="Minimum monthly contribution"
               type="number"
               fullWidth
+              disabled={busy || locked}
               value={draft.min_monthly_contribution ?? 0}
               onChange={(e) => setDraft((p) => ({ ...p, min_monthly_contribution: Number(e.target.value) }))}
             />
@@ -660,6 +807,7 @@ function SettingsPanel({
               label="Admin fee (% of loan interest)"
               type="number"
               fullWidth
+              disabled={busy || locked}
               value={draft.admin_fee_percent ?? 0}
               onChange={(e) => setDraft((p) => ({ ...p, admin_fee_percent: Number(e.target.value) }))}
             />
@@ -669,6 +817,7 @@ function SettingsPanel({
               label="Loan interest (%)"
               type="number"
               fullWidth
+              disabled={busy || locked}
               value={draft.loan_interest_percent ?? 10}
               onChange={(e) => setDraft((p) => ({ ...p, loan_interest_percent: Number(e.target.value) }))}
             />
@@ -678,9 +827,10 @@ function SettingsPanel({
               label="Loan limit multiplier"
               type="number"
               fullWidth
+              disabled={busy || locked}
               value={draft.loan_limit_multiplier ?? 2}
               onChange={(e) => setDraft((p) => ({ ...p, loan_limit_multiplier: Number(e.target.value) }))}
-              helperText={draft.enforce_loan_limit ? "Max loan = contribution × multiplier" : "Loan limit disabled"}
+              helperText={draft.enforce_loan_limit ? "Max loan = contribution x multiplier" : "Loan limit disabled"}
             />
           </Grid>
           <Grid item xs={12} md={6}>
@@ -688,6 +838,7 @@ function SettingsPanel({
               control={
                 <Switch
                   checked={draft.enforce_loan_limit ?? true}
+                  disabled={busy || locked}
                   onChange={(e) => setDraft((p) => ({ ...p, enforce_loan_limit: e.target.checked }))}
                 />
               }
@@ -696,16 +847,80 @@ function SettingsPanel({
           </Grid>
           <Grid item xs={12} md={6}>
             <TextField
+              label="Liquidity cap (% outstanding)"
+              type="number"
+              fullWidth
+              disabled={busy || locked}
+              value={draft.liquidity_max_outstanding_percent ?? 80}
+              onChange={(e) => setDraft((p) => ({ ...p, liquidity_max_outstanding_percent: Number(e.target.value) }))}
+              helperText="Total outstanding principal must stay below this % of the pool"
+            />
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <TextField
+              label="Min term (months)"
+              type="number"
+              fullWidth
+              disabled={busy || locked}
+              value={draft.min_term_months ?? 1}
+              onChange={(e) => setDraft((p) => ({ ...p, min_term_months: Number(e.target.value) }))}
+            />
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <TextField
+              label="Max term (months)"
+              type="number"
+              fullWidth
+              disabled={busy || locked}
+              value={draft.max_term_months ?? 12}
+              onChange={(e) => setDraft((p) => ({ ...p, max_term_months: Number(e.target.value) }))}
+            />
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <TextField
+              label="Max active loans per member"
+              type="number"
+              fullWidth
+              disabled={busy || locked}
+              value={draft.max_active_loans_per_member ?? 1}
+              onChange={(e) => setDraft((p) => ({ ...p, max_active_loans_per_member: Number(e.target.value) }))}
+            />
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <TextField
+              label="Cooldown after settlement (days)"
+              type="number"
+              fullWidth
+              disabled={busy || locked}
+              value={draft.cooldown_days_after_settlement ?? 0}
+              onChange={(e) => setDraft((p) => ({ ...p, cooldown_days_after_settlement: Number(e.target.value) }))}
+            />
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <TextField
               label="Withdrawal cycle (days)"
               type="number"
               fullWidth
+              disabled={busy || locked}
               value={draft.withdrawal_cycle_days ?? 30}
               onChange={(e) => setDraft((p) => ({ ...p, withdrawal_cycle_days: Number(e.target.value) }))}
             />
           </Grid>
         </Grid>
-        <Box display="flex" justifyContent="flex-end" mt={2}>
-          <Button variant="contained" disabled={busy} onClick={() => onSave(draft)}>
+        <Box display="flex" justifyContent="space-between" mt={2}>
+          <Button
+            variant="outlined"
+            color="warning"
+            disabled={busy || locked}
+            onClick={() => {
+              if (window.confirm("Lock constitution for this cycle? This cannot be changed later.")) {
+                void onLockConstitution();
+              }
+            }}
+          >
+            Lock constitution
+          </Button>
+          <Button variant="contained" disabled={busy || locked} onClick={() => onSave(draft)}>
             Save
           </Button>
         </Box>
@@ -724,28 +939,77 @@ function MemberWorkspace({
   onError: (msg: string) => void;
 }) {
   const [summary, setSummary] = useState<MemberSummary | null>(null);
+  const [forecast, setForecast] = useState<MemberForecast | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
+  const [groupLoans, setGroupLoans] = useState<LoanBoardItem[]>([]);
+  const [contributions, setContributions] = useState<GroupContributionItem[]>([]);
+  const [loanRequests, setLoanRequests] = useState<LoanRequest[]>([]);
   const [group, setGroup] = useState<GroupWithSettings | null>(null);
   const [membershipAccepted, setMembershipAccepted] = useState(true);
   const [busy, setBusy] = useState(false);
   const [repayOpen, setRepayOpen] = useState(false);
   const [repayLoanId, setRepayLoanId] = useState<number | null>(null);
   const [repayAmount, setRepayAmount] = useState(0);
+  const [requestOpen, setRequestOpen] = useState(false);
+  const [requestDraft, setRequestDraft] = useState<LoanRequestCreatePayload>({
+    principal: 0,
+    term_months: 1,
+    repayment_frequency: "monthly",
+    description: "",
+  });
 
   const refresh = async () => {
     setBusy(true);
     try {
-      const [ctx, sum, tx] = await Promise.all([Api.getMeContext(), Api.getMeSummary(), Api.getMeTransactions()]);
+      const ctx = await Api.getMeContext();
+      const accepted = !!ctx.membership?.accepted_terms_at;
+      setGroup(ctx.group ?? null);
+      setMembershipAccepted(accepted);
+
+      const [sum, tx] = await Promise.all([Api.getMeSummary(), Api.getMeTransactions()]);
       setSummary(sum);
       setTransactions(tx);
-      setGroup(ctx.group ?? null);
-      setMembershipAccepted(!!ctx.membership?.accepted_terms_at);
+
+      if (accepted && ctx.group?.id) {
+        try {
+          setForecast(await Api.getMeForecast());
+        } catch {
+          setForecast(null);
+        }
+      } else {
+        setForecast(null);
+      }
+
       if (ctx.group?.id) {
         const myLoans = await Api.getGroupLoans(ctx.group.id);
         setLoans(myLoans);
+        if (accepted) {
+          try {
+            setGroupLoans(await Api.getGroupLoanBoard(ctx.group.id));
+          } catch {
+            setGroupLoans([]);
+          }
+          try {
+            setContributions(await Api.getGroupContributions(ctx.group.id));
+          } catch {
+            setContributions([]);
+          }
+          try {
+            setLoanRequests(await Api.listLoanRequests(ctx.group.id));
+          } catch {
+            setLoanRequests([]);
+          }
+        } else {
+          setGroupLoans([]);
+          setContributions([]);
+          setLoanRequests([]);
+        }
       } else {
         setLoans([]);
+        setGroupLoans([]);
+        setContributions([]);
+        setLoanRequests([]);
       }
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to load member portal");
@@ -784,6 +1048,106 @@ function MemberWorkspace({
       { field: "status", headerName: "Status", width: 120 },
     ],
     []
+  );
+
+  const forecastByLoanId = useMemo(() => {
+    const map = new Map<number, MemberLoanForecast>();
+    for (const item of forecast?.loans ?? []) {
+      map.set(item.loan_id, item);
+    }
+    return map;
+  }, [forecast]);
+
+  const constitutionLocked = Boolean(group?.settings?.constitution_locked_at);
+
+  const groupLoanColumns: GridColDef<LoanBoardItem>[] = useMemo(
+    () => [
+      { field: "borrower_name", headerName: "Borrower", flex: 1, minWidth: 180 },
+      { field: "principal", headerName: "Principal", width: 140, valueFormatter: (v) => currency(Number(v)) },
+      {
+        field: "outstanding",
+        headerName: "Outstanding",
+        width: 160,
+        valueGetter: (_, row) => Number(row.outstanding_principal) + Number(row.outstanding_interest),
+        valueFormatter: (v) => currency(Number(v)),
+      },
+      {
+        field: "next_due_date",
+        headerName: "Next due",
+        width: 170,
+        valueFormatter: (v) => (v ? new Date(String(v)).toLocaleDateString() : "—"),
+      },
+      {
+        field: "my_expected_interest",
+        headerName: "My expected interest",
+        width: 180,
+        valueGetter: (_, row) => forecastByLoanId.get(Number(row.id))?.my_expected_interest ?? 0,
+        valueFormatter: (v) => currency(Number(v)),
+      },
+      { field: "status", headerName: "Status", width: 120 },
+    ],
+    [forecastByLoanId]
+  );
+
+  const contributionColumns: GridColDef<GroupContributionItem>[] = useMemo(
+    () => [
+      { field: "member_name", headerName: "Member", flex: 1, minWidth: 180 },
+      { field: "net_contribution", headerName: "Net contribution", width: 170, valueFormatter: (v) => currency(Number(v)) },
+      { field: "share_percent", headerName: "Share", width: 120, valueFormatter: (v) => `${Number(v).toFixed(2)}%` },
+    ],
+    []
+  );
+
+  const requestColumns: GridColDef<LoanRequest>[] = useMemo(
+    () => [
+      { field: "id", headerName: "Request", width: 110 },
+      { field: "principal", headerName: "Principal", width: 140, valueFormatter: (v) => currency(Number(v)) },
+      { field: "term_months", headerName: "Term", width: 110, valueFormatter: (v) => `${Number(v)} mo` },
+      { field: "repayment_frequency", headerName: "Frequency", width: 130 },
+      { field: "status", headerName: "Status", width: 120 },
+      {
+        field: "approved_loan_id",
+        headerName: "Loan",
+        width: 110,
+        valueGetter: (_, row) => (row.custom_fields?.approved_loan_id ? `#${row.custom_fields.approved_loan_id}` : "—"),
+      },
+      { field: "decision_reason", headerName: "Note", flex: 1, minWidth: 200, valueGetter: (_, row) => row.decision_reason ?? "—" },
+      {
+        field: "created_at",
+        headerName: "Requested",
+        width: 170,
+        valueFormatter: (v) => (v ? new Date(String(v)).toLocaleString() : "—"),
+      },
+      {
+        field: "actions",
+        headerName: "",
+        width: 140,
+        sortable: false,
+        filterable: false,
+        renderCell: ({ row }) => {
+          if (row.status !== "requested" && row.status !== "queued") return null;
+          return (
+            <Button
+              size="small"
+              variant="outlined"
+              color="error"
+              disabled={busy}
+              onClick={async () => {
+                try {
+                  await Api.cancelLoanRequest(row.id);
+                  await refresh();
+                } catch (err) {
+                  onError(err instanceof Error ? err.message : "Failed to cancel request");
+                }
+              }}
+            >
+              Cancel
+            </Button>
+          );
+        },
+      },
+    ],
+    [busy, onError]
   );
 
   return (
@@ -829,7 +1193,105 @@ function MemberWorkspace({
           <Grid item xs={12} md={4}>
             <StatCard label="Outstanding loans" value={currency(Number(summary?.loan_outstanding ?? 0))} icon={<CreditCardIcon color="action" />} />
           </Grid>
+          <Grid item xs={12} md={6}>
+            <StatCard
+              label="Next withdrawal"
+              value={summary?.next_withdrawal_at ? new Date(summary.next_withdrawal_at).toLocaleDateString() : "—"}
+              icon={<PaymentsIcon color="action" />}
+            />
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <StatCard
+              label="Next interest accrual"
+              value={summary?.next_interest_accrual_at ? new Date(summary.next_interest_accrual_at).toLocaleDateString() : "—"}
+              icon={<PaymentsIcon color="action" />}
+            />
+          </Grid>
         </Grid>
+
+        {group && (
+          <Card variant="outlined" sx={{ mb: 2 }}>
+            <CardContent>
+              <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+                <Typography variant="h6">Group loans</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Your share: {(forecast?.my_share_percent ?? 0).toFixed(2)}% of distributable interest
+                </Typography>
+              </Box>
+              <Box height={320}>
+                <DataGrid
+                  rows={groupLoans}
+                  columns={groupLoanColumns}
+                  disableRowSelectionOnClick
+                  loading={busy}
+                  getRowId={(row) => row.id}
+                  pageSizeOptions={[5, 10]}
+                  initialState={{ pagination: { paginationModel: { pageSize: 5, page: 0 } } }}
+                />
+              </Box>
+            </CardContent>
+          </Card>
+        )}
+
+        {group && (
+          <Card variant="outlined" sx={{ mb: 2 }}>
+            <CardContent>
+              <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+                <Typography variant="h6">Contribution shares</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Used to split loan interest after admin fee
+                </Typography>
+              </Box>
+              <Box height={320}>
+                <DataGrid
+                  rows={contributions}
+                  columns={contributionColumns}
+                  disableRowSelectionOnClick
+                  loading={busy}
+                  getRowId={(row) => row.account_id}
+                  pageSizeOptions={[5, 10]}
+                  initialState={{ pagination: { paginationModel: { pageSize: 5, page: 0 } } }}
+                />
+              </Box>
+            </CardContent>
+          </Card>
+        )}
+
+        {group && (
+          <Card variant="outlined" sx={{ mb: 2 }}>
+            <CardContent>
+              <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+                <Typography variant="h6">Loan requests</Typography>
+                <Button
+                  variant="outlined"
+                  disabled={busy || !membershipAccepted || !constitutionLocked}
+                  onClick={() => {
+                    setRequestDraft({ principal: 0, term_months: 1, repayment_frequency: "monthly", description: "" });
+                    setRequestOpen(true);
+                  }}
+                >
+                  Request loan
+                </Button>
+              </Box>
+              {!constitutionLocked && (
+                <Alert severity="info" sx={{ mb: 2 }}>
+                  Loan requests open after the group locks the constitution for this cycle.
+                </Alert>
+              )}
+              <Box height={320}>
+                <DataGrid
+                  rows={loanRequests}
+                  columns={requestColumns}
+                  disableRowSelectionOnClick
+                  loading={busy}
+                  getRowId={(row) => row.id}
+                  pageSizeOptions={[5, 10]}
+                  initialState={{ pagination: { paginationModel: { pageSize: 5, page: 0 } } }}
+                />
+              </Box>
+            </CardContent>
+          </Card>
+        )}
 
         <Card variant="outlined" sx={{ mb: 2 }}>
           <CardContent>
@@ -912,6 +1374,80 @@ function MemberWorkspace({
             }}
           >
             Repay
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={requestOpen} onClose={() => setRequestOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>Request loan</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 2 }}>
+            Your request is auto-approved, rejected, or queued based on the group constitution.
+          </Typography>
+          {!constitutionLocked && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Constitution is not locked yet for this cycle. Loan requests are disabled.
+            </Alert>
+          )}
+          <Grid container spacing={2}>
+            <Grid item xs={12}>
+              <TextField
+                label="Principal"
+                type="number"
+                fullWidth
+                value={requestDraft.principal}
+                onChange={(e) => setRequestDraft((p) => ({ ...p, principal: Number(e.target.value) }))}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                label="Term (months)"
+                type="number"
+                fullWidth
+                value={requestDraft.term_months ?? 1}
+                onChange={(e) => setRequestDraft((p) => ({ ...p, term_months: Number(e.target.value) }))}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <FormControl fullWidth>
+                <InputLabel id="repay-frequency-label">Repayment frequency</InputLabel>
+                <Select
+                  labelId="repay-frequency-label"
+                  label="Repayment frequency"
+                  value={requestDraft.repayment_frequency ?? "monthly"}
+                  onChange={(e) => setRequestDraft((p) => ({ ...p, repayment_frequency: e.target.value as any }))}
+                >
+                  <MenuItem value="weekly">Weekly</MenuItem>
+                  <MenuItem value="monthly">Monthly</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                label="Description (optional)"
+                fullWidth
+                value={requestDraft.description ?? ""}
+                onChange={(e) => setRequestDraft((p) => ({ ...p, description: e.target.value }))}
+              />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRequestOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={!membershipAccepted || busy || !group?.id || !constitutionLocked || (requestDraft.principal ?? 0) <= 0}
+            onClick={async () => {
+              try {
+                await Api.requestLoan(group!.id, requestDraft);
+                setRequestOpen(false);
+                await refresh();
+              } catch (err) {
+                onError(err instanceof Error ? err.message : "Failed to request loan");
+              }
+            }}
+          >
+            Submit request
           </Button>
         </DialogActions>
       </Dialog>

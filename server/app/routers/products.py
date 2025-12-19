@@ -14,7 +14,7 @@ def _is_platform_admin(role: str) -> bool:
     return role in {"admin", "operator"}
 
 
-@router.get("/", response_model=List[SavingsProductRead])
+@router.get("", response_model=List[SavingsProductRead])
 def list_products(
     session: Session = Depends(get_session),
     current_user=Depends(get_current_active_user),
@@ -24,7 +24,7 @@ def list_products(
     return session.exec(select(SavingsProduct)).all()
 
 
-@router.post("/", response_model=SavingsProductRead, status_code=201)
+@router.post("", response_model=SavingsProductRead, status_code=201)
 def create_product(
     payload: SavingsProductCreate,
     session: Session = Depends(get_session),

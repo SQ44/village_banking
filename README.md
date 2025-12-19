@@ -157,6 +157,21 @@ docker compose up
 
 The SQLite database is persisted in the `api-data` Docker volume.
 
+Before first run, create your local env files:
+
+```bash
+cp server/.env.example server/.env
+cp lenco_pay/.env.example lenco_pay/.env
+```
+
+Set at least `default_admin_email`, `default_admin_password`, and `auth_secret_key` in `server/.env`.
+
+PowerShell helper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File server\\scripts\\bootstrap_env.ps1
+```
+
 
 
 ## Next Steps

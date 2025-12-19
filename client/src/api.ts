@@ -7,13 +7,19 @@ import type {
   GroupSettings,
   GroupSettingsUpdatePayload,
   GroupWithSettings,
+  GroupContributionItem,
   InterestPreview,
   InterestRequest,
   Loan,
   LoanCreatePayload,
   LoanInstallment,
   LoanRepaymentPayload,
+  LoanRequest,
+  LoanRequestCreatePayload,
+  LoanRequestDecisionPayload,
+  LoanBoardItem,
   MemberInvitePayload,
+  MemberForecast,
   MemberSummary,
   Membership,
   SavingsProduct,
@@ -102,20 +108,32 @@ export const Api = {
   getGroup: (groupId: number) => request<GroupWithSettings>(`/groups/${groupId}`),
   updateGroupSettings: (groupId: number, payload: GroupSettingsUpdatePayload) =>
     request<GroupSettings>(`/groups/${groupId}/settings`, { method: "PATCH", body: JSON.stringify(payload) }),
+  lockGroupConstitution: (groupId: number) =>
+    request<GroupSettings>(`/groups/${groupId}/constitution/lock`, { method: "POST" }),
   getGroupMembers: (groupId: number) => request<Membership[]>(`/groups/${groupId}/members`),
   addGroupMember: (groupId: number, payload: MemberInvitePayload) =>
     request<Membership>(`/groups/${groupId}/members`, { method: "POST", body: JSON.stringify(payload) }),
   acceptGroupTerms: (groupId: number) =>
     request<Membership>(`/groups/${groupId}/accept-terms`, { method: "POST", body: JSON.stringify({ accepted: true }) }),
   getGroupAccounts: (groupId: number) => request<Account[]>(`/groups/${groupId}/accounts`),
+  getGroupContributions: (groupId: number) => request<GroupContributionItem[]>(`/groups/${groupId}/contributions`),
 
   getMeSummary: () => request<MemberSummary>("/me/summary"),
   getMeContext: () => request<{ membership?: Membership; group?: GroupWithSettings }>("/me/context"),
   getMeTransactions: () => request<Transaction[]>("/me/transactions"),
+  getMeForecast: () => request<MemberForecast>("/me/forecast"),
 
   getGroupLoans: (groupId: number) => request<Loan[]>(`/loans/group/${groupId}`),
+  getGroupLoanBoard: (groupId: number) => request<LoanBoardItem[]>(`/loans/group/${groupId}/board`),
   createLoan: (groupId: number, payload: LoanCreatePayload) =>
     request<Loan>(`/loans/group/${groupId}`, { method: "POST", body: JSON.stringify(payload) }),
+  requestLoan: (groupId: number, payload: LoanRequestCreatePayload) =>
+    request<LoanRequest>(`/loans/group/${groupId}/requests`, { method: "POST", body: JSON.stringify(payload) }),
+  listLoanRequests: (groupId: number) => request<LoanRequest[]>(`/loans/group/${groupId}/requests`),
+  decideLoanRequest: (requestId: number, payload: LoanRequestDecisionPayload) =>
+    request<LoanRequest>(`/loans/requests/${requestId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  cancelLoanRequest: (requestId: number) =>
+    request<LoanRequest>(`/loans/requests/${requestId}/cancel`, { method: "POST" }),
   getLoanSchedule: (loanId: number) => request<LoanInstallment[]>(`/loans/${loanId}/schedule`),
   repayLoan: (loanId: number, payload: LoanRepaymentPayload) =>
     request<Loan>(`/loans/${loanId}/repay`, { method: "POST", body: JSON.stringify(payload) }),

@@ -6,6 +6,7 @@ from sqlmodel import Session, select
 
 from ..auth import get_current_active_user
 from ..database import get_session
+from ..autonomous_lending import process_queued_requests
 from ..lenco_service import LencoPayClient
 from ..models import Account, GroupSettings, Membership, Transaction, TransactionStatus, TransactionType
 from ..schemas import TransactionCreate, TransactionRead, TransactionStatusUpdate
@@ -44,7 +45,7 @@ def _apply_balance(account: Account, transaction: Transaction) -> None:
         account.balance -= transaction.amount
 
 
-@router.get("/", response_model=List[TransactionRead])
+@router.get("", response_model=List[TransactionRead])
 def list_transactions(
     account_id: Optional[int] = None,
     status: Optional[TransactionStatus] = None,
@@ -68,7 +69,7 @@ def list_transactions(
     return session.exec(statement).all()
 
 
-@router.post("/", response_model=TransactionRead, status_code=201)
+@router.post("", response_model=TransactionRead, status_code=201)
 async def create_transaction(
     payload: TransactionCreate,
     session: Session = Depends(get_session),
@@ -206,6 +207,9 @@ async def create_transaction(
         session.add(transaction)
         session.commit()
         session.refresh(transaction)
+
+    if account.group_id and transaction.status == TransactionStatus.COMPLETED and transaction.type == TransactionType.DEPOSIT:
+        process_queued_requests(session, group_id=int(account.group_id))
     return transaction
 
 
@@ -250,4 +254,6 @@ def update_transaction(
     session.add(transaction)
     session.commit()
     session.refresh(transaction)
+    if account.group_id and transaction.status == TransactionStatus.COMPLETED and transaction.type == TransactionType.DEPOSIT:
+        process_queued_requests(session, group_id=int(account.group_id))
     return transaction

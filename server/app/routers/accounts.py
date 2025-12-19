@@ -15,7 +15,7 @@ def _is_platform_admin(role: str) -> bool:
     return role in {"admin", "operator"}
 
 
-@router.get("/", response_model=List[AccountRead])
+@router.get("", response_model=List[AccountRead])
 def list_accounts(
     search: Optional[str] = None,
     session: Session = Depends(get_session),
@@ -30,7 +30,7 @@ def list_accounts(
     return accounts
 
 
-@router.post("/", response_model=AccountRead, status_code=201)
+@router.post("", response_model=AccountRead, status_code=201)
 def create_account(
     payload: AccountCreate,
     session: Session = Depends(get_session),

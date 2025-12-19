@@ -102,6 +102,12 @@ export interface GroupSettings {
   loan_interest_percent: number;
   enforce_loan_limit: boolean;
   loan_limit_multiplier: number;
+  liquidity_max_outstanding_percent: number;
+  min_term_months: number;
+  max_term_months: number;
+  max_active_loans_per_member: number;
+  cooldown_days_after_settlement: number;
+  constitution_locked_at?: string | null;
   withdrawal_cycle_days: number;
   allow_advance_contribution: boolean;
   custom_fields: Record<string, any>;
@@ -122,6 +128,11 @@ export interface GroupSettingsUpdatePayload {
   loan_interest_percent?: number;
   enforce_loan_limit?: boolean;
   loan_limit_multiplier?: number;
+  liquidity_max_outstanding_percent?: number;
+  min_term_months?: number;
+  max_term_months?: number;
+  max_active_loans_per_member?: number;
+  cooldown_days_after_settlement?: number;
   withdrawal_cycle_days?: number;
   allow_advance_contribution?: boolean;
   custom_fields?: Record<string, any>;
@@ -149,6 +160,7 @@ export interface MemberInvitePayload {
 
 export type RepaymentFrequency = "weekly" | "monthly";
 export type LoanStatus = "active" | "closed";
+export type LoanRequestStatus = "requested" | "queued" | "approved" | "rejected" | "canceled";
 
 export interface Loan {
   id: number;
@@ -204,6 +216,81 @@ export interface MemberSummary {
   interest_earned: number;
   loan_outstanding: number;
   active_loan_count: number;
+  next_withdrawal_at?: string | null;
+  days_until_withdrawal?: number | null;
+  next_interest_accrual_at?: string | null;
+  days_until_interest_accrual?: number | null;
+}
+
+export interface LoanBoardItem {
+  id: number;
+  group_id: number;
+  borrower_account_id: number;
+  borrower_name: string;
+  principal: number;
+  interest_rate_percent: number;
+  admin_fee_percent: number;
+  outstanding_principal: number;
+  outstanding_interest: number;
+  status: LoanStatus;
+  disbursed_at: string;
+  next_due_date?: string | null;
+}
+
+export interface MemberLoanForecast {
+  loan_id: number;
+  borrower_name: string;
+  outstanding_interest: number;
+  admin_fee_percent: number;
+  distributable_interest: number;
+  my_share_percent: number;
+  my_expected_interest: number;
+}
+
+export interface MemberForecast {
+  group_id?: number | null;
+  my_net_contribution: number;
+  group_total_contributions: number;
+  my_share_percent: number;
+  loans: MemberLoanForecast[];
+}
+
+export interface GroupContributionItem {
+  account_id: number;
+  member_name: string;
+  net_contribution: number;
+  share_percent: number;
+}
+
+export interface LoanRequestCreatePayload {
+  principal: number;
+  term_months?: number;
+  repayment_frequency?: RepaymentFrequency;
+  description?: string;
+}
+
+export interface LoanRequest {
+  id: number;
+  group_id: number;
+  borrower_account_id: number;
+  requester_user_id: number;
+  principal: number;
+  term_months: number;
+  repayment_frequency: RepaymentFrequency;
+  interest_rate_percent?: number | null;
+  status: LoanRequestStatus;
+  description?: string | null;
+  decision_reason?: string | null;
+  decided_by_user_id?: number | null;
+  decided_at?: string | null;
+  created_at: string;
+  custom_fields: Record<string, any>;
+}
+
+export interface LoanRequestDecisionPayload {
+  decision: "approve" | "reject";
+  decision_reason?: string;
+  interest_rate_percent?: number;
 }
 
 export interface InterestPreview {

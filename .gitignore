@@ -1,3 +1,7 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
 # Byte-compiled / optimized / DLL files
 lenco_pay/__pycache__/
 lenco_pay/*.py[cod]
@@ -119,6 +123,14 @@ lenco_pay/.mypy_cache/
 lenco_pay/.dmypy.json
 lenco_pay/dmypy.json
 
+# Environment files (keep *.env.example tracked)
+.env
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
 # Pyre type checker
 lenco_pay/.pyre/
 
@@ -235,3 +247,6 @@ lenco_pay/$RECYCLE.BIN/
 server/.venv/
 server/__pycache__/
 package
+
+# Server logs
+server/*.log

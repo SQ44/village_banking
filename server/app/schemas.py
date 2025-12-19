@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Literal
 
 from pydantic import BaseModel, Field as PydanticField
 from sqlmodel import SQLModel
@@ -9,6 +9,7 @@ from sqlmodel import SQLModel
 from .models import (
     InstallmentStatus,
     LoanStatus,
+    LoanRequestStatus,
     MembershipRole,
     RepaymentFrequency,
     TransactionStatus,
@@ -153,6 +154,11 @@ class GroupSettingsUpdate(SQLModel):
     loan_interest_percent: Optional[float] = None
     enforce_loan_limit: Optional[bool] = None
     loan_limit_multiplier: Optional[float] = None
+    liquidity_max_outstanding_percent: Optional[float] = None
+    min_term_months: Optional[int] = None
+    max_term_months: Optional[int] = None
+    max_active_loans_per_member: Optional[int] = None
+    cooldown_days_after_settlement: Optional[int] = None
     withdrawal_cycle_days: Optional[int] = None
     allow_advance_contribution: Optional[bool] = None
     custom_fields: Optional[Dict[str, Any]] = None
@@ -165,6 +171,12 @@ class GroupSettingsRead(SQLModel):
     loan_interest_percent: float
     enforce_loan_limit: bool
     loan_limit_multiplier: float
+    liquidity_max_outstanding_percent: float
+    min_term_months: int
+    max_term_months: int
+    max_active_loans_per_member: int
+    cooldown_days_after_settlement: int
+    constitution_locked_at: Optional[datetime] = None
     withdrawal_cycle_days: int
     allow_advance_contribution: bool
     custom_fields: Dict[str, Any]
@@ -250,8 +262,83 @@ class MemberSummary(SQLModel):
     interest_earned: float = 0
     loan_outstanding: float = 0
     active_loan_count: int = 0
+    next_withdrawal_at: Optional[datetime] = None
+    days_until_withdrawal: Optional[int] = None
+    next_interest_accrual_at: Optional[datetime] = None
+    days_until_interest_accrual: Optional[int] = None
+
+
+class LoanBoardItem(SQLModel):
+    id: int
+    group_id: int
+    borrower_account_id: int
+    borrower_name: str
+    principal: float
+    interest_rate_percent: float
+    admin_fee_percent: float
+    outstanding_principal: float
+    outstanding_interest: float
+    status: LoanStatus
+    disbursed_at: datetime
+    next_due_date: Optional[datetime] = None
+
+
+class MemberLoanForecast(SQLModel):
+    loan_id: int
+    borrower_name: str
+    outstanding_interest: float
+    admin_fee_percent: float
+    distributable_interest: float
+    my_share_percent: float
+    my_expected_interest: float
+
+
+class MemberForecast(SQLModel):
+    group_id: Optional[int] = None
+    my_net_contribution: float
+    group_total_contributions: float
+    my_share_percent: float
+    loans: list[MemberLoanForecast] = []
 
 
 class MeContext(SQLModel):
     membership: Optional[MembershipRead] = None
     group: Optional[GroupWithSettings] = None
+
+
+class GroupContributionItem(SQLModel):
+    account_id: int
+    member_name: str
+    net_contribution: float
+    share_percent: float
+
+
+class LoanRequestCreate(SQLModel):
+    principal: float
+    term_months: int = 1
+    repayment_frequency: RepaymentFrequency = RepaymentFrequency.MONTHLY
+    description: Optional[str] = None
+
+
+class LoanRequestRead(SQLModel):
+    id: int
+    group_id: int
+    borrower_account_id: int
+    requester_user_id: int
+    principal: float
+    term_months: int
+    repayment_frequency: RepaymentFrequency
+    interest_rate_percent: Optional[float] = None
+    status: LoanRequestStatus
+    description: Optional[str] = None
+    decision_reason: Optional[str] = None
+    decided_by_user_id: Optional[int] = None
+    decided_at: Optional[datetime] = None
+    created_at: datetime
+    custom_fields: Dict[str, Any]
+
+
+class LoanRequestDecision(SQLModel):
+    decision: Literal["approve", "reject"]
+    decision_reason: Optional[str] = None
+    interest_rate_percent: Optional[float] = None

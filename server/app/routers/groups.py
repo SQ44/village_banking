@@ -6,10 +6,12 @@ from sqlmodel import Session, select
 
 from ..auth import create_user, get_current_active_user
 from ..database import get_session
+from ..group_finance import net_contributions_by_account
 from ..models import Account, Group, GroupSettings, Membership, MembershipRole, Transaction, TransactionStatus, TransactionType, User
 from ..schemas import (
     AcceptTermsRequest,
     AccountRead,
+    GroupContributionItem,
     GroupCreate,
     GroupRead,
     GroupSettingsRead,
@@ -63,7 +65,7 @@ def _group_with_settings(group: Group, settings: GroupSettings) -> GroupWithSett
     )
 
 
-@router.get("/", response_model=List[GroupRead])
+@router.get("", response_model=List[GroupRead])
 def list_groups(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_active_user),
@@ -79,7 +81,7 @@ def list_groups(
     return session.exec(statement).all()
 
 
-@router.post("/", response_model=GroupWithSettings, status_code=201)
+@router.post("", response_model=GroupWithSettings, status_code=201)
 def create_group(
     payload: GroupCreate,
     session: Session = Depends(get_session),
@@ -142,8 +144,14 @@ def update_group_settings(
         session.commit()
         session.refresh(settings)
     updates = payload.model_dump(exclude_unset=True)
+    if settings.constitution_locked_at is not None:
+        mutable = {"custom_fields"}
+        forbidden = set(updates.keys()) - mutable
+        if forbidden:
+            raise HTTPException(status_code=400, detail="Constitution is locked for this cycle")
     if "custom_fields" in updates and updates["custom_fields"] is not None:
-        settings.custom_fields.update(updates.pop("custom_fields"))
+        # Avoid in-place JSON mutations (may not be detected by SQLAlchemy).
+        settings.custom_fields = {**dict(settings.custom_fields or {}), **dict(updates.pop("custom_fields") or {})}
     for key, value in updates.items():
         setattr(settings, key, value)
     session.add(settings)
@@ -259,3 +267,65 @@ def accept_terms(
     session.commit()
     session.refresh(membership)
     return membership
+
+
+@router.post("/{group_id}/constitution/lock", response_model=GroupSettingsRead)
+def lock_constitution(
+    group_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
+) -> GroupSettingsRead:
+    if not _is_platform_admin(current_user):
+        _require_group_admin(session, group_id=group_id, user=current_user)
+    settings = session.get(GroupSettings, group_id)
+    if not settings:
+        settings = GroupSettings(group_id=group_id)
+        session.add(settings)
+        session.commit()
+        session.refresh(settings)
+    if settings.constitution_locked_at is None:
+        settings.constitution_locked_at = datetime.utcnow()
+        session.add(settings)
+        session.commit()
+        session.refresh(settings)
+    return _settings_read(settings)
+
+
+@router.get("/{group_id}/contributions", response_model=list[GroupContributionItem])
+def group_contributions(
+    group_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
+) -> list[GroupContributionItem]:
+    group = session.get(Group, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    membership = _get_membership(session, group_id=group_id, user_id=current_user.id)
+    if not membership and not _is_platform_admin(current_user):
+        raise HTTPException(status_code=403, detail="Not a group member")
+    if membership and membership.accepted_terms_at is None and not _is_platform_admin(current_user):
+        raise HTTPException(status_code=403, detail="Accept group terms first")
+
+    contributions = net_contributions_by_account(session, group_id=group_id)
+    positive = {account_id: max(float(total), 0.0) for account_id, total in contributions.items()}
+    group_total = sum(positive.values())
+
+    accounts = session.exec(select(Account.id, Account.name).where(Account.group_id == group_id)).all()
+    names = {int(aid): name for aid, name in accounts}
+
+    items: list[GroupContributionItem] = []
+    for account_id, net in contributions.items():
+        weight = max(float(net), 0.0)
+        share = round((weight / group_total) * 100.0, 2) if group_total > 0 else 0.0
+        items.append(
+            GroupContributionItem(
+                account_id=int(account_id),
+                member_name=names.get(int(account_id), f"Account {account_id}"),
+                net_contribution=round(float(net), 2),
+                share_percent=share,
+            )
+        )
+
+    items.sort(key=lambda item: item.net_contribution, reverse=True)
+    return items

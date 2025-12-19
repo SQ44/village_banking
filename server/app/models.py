@@ -76,6 +76,15 @@ class GroupSettings(SQLModel, table=True):
     enforce_loan_limit: bool = Field(default=True)
     loan_limit_multiplier: float = Field(default=2, description="Max loan = contribution * multiplier")
 
+    liquidity_max_outstanding_percent: float = Field(
+        default=80, description="Total outstanding principal must be <= percent of pool"
+    )
+    min_term_months: int = Field(default=1)
+    max_term_months: int = Field(default=12)
+    max_active_loans_per_member: int = Field(default=1)
+    cooldown_days_after_settlement: int = Field(default=0, description="Days after closing a loan before borrowing again")
+    constitution_locked_at: Optional[datetime] = None
+
     withdrawal_cycle_days: int = Field(default=30)
     allow_advance_contribution: bool = Field(default=True)
     custom_fields: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
@@ -147,6 +156,35 @@ class LoanStatus(str, Enum):
 class RepaymentFrequency(str, Enum):
     WEEKLY = "weekly"
     MONTHLY = "monthly"
+
+
+class LoanRequestStatus(str, Enum):
+    REQUESTED = "requested"
+    QUEUED = "queued"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    CANCELED = "canceled"
+
+
+class LoanRequest(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    group_id: int = Field(foreign_key="group.id", index=True)
+    borrower_account_id: int = Field(foreign_key="account.id", index=True)
+    requester_user_id: int = Field(foreign_key="user.id", index=True)
+
+    principal: float
+    term_months: int = Field(default=1)
+    repayment_frequency: RepaymentFrequency = Field(default=RepaymentFrequency.MONTHLY)
+    interest_rate_percent: Optional[float] = None
+
+    status: LoanRequestStatus = Field(default=LoanRequestStatus.REQUESTED, index=True)
+    description: Optional[str] = None
+    decision_reason: Optional[str] = None
+    decided_by_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    decided_at: Optional[datetime] = None
+
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    custom_fields: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
 
 class Loan(SQLModel, table=True):

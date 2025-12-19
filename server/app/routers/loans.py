@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 from sqlalchemy import func
 
+from ..autonomous_lending import auto_decide_and_apply, process_queued_requests
 from ..auth import get_current_active_user
 from ..database import get_session
 from ..models import (
@@ -18,6 +19,8 @@ from ..models import (
     Loan,
     LoanInstallment,
     LoanStatus,
+    LoanRequest,
+    LoanRequestStatus,
     Membership,
     MembershipRole,
     RepaymentFrequency,
@@ -26,7 +29,17 @@ from ..models import (
     TransactionType,
     User,
 )
-from ..schemas import LoanCreate, LoanInstallmentRead, LoanRead, LoanRepaymentRequest
+from ..group_finance import net_contributions_by_account, round_allocations
+from ..schemas import (
+    LoanBoardItem,
+    LoanCreate,
+    LoanInstallmentRead,
+    LoanRead,
+    LoanRepaymentRequest,
+    LoanRequestCreate,
+    LoanRequestDecision,
+    LoanRequestRead,
+)
 
 router = APIRouter(prefix="/loans", tags=["Loans"])
 
@@ -71,52 +84,96 @@ def _schedule_due_date(start: datetime, *, frequency: RepaymentFrequency, step: 
     return start + timedelta(days=30 * step)
 
 
-def _round_allocations(amount: float, weights: List[tuple[int, float]]) -> List[tuple[int, float]]:
-    total = sum(w for _, w in weights)
-    if amount <= 0 or total <= 0:
-        return []
-    raw = [(account_id, (amount * w) / total) for account_id, w in weights]
-    rounded = [(account_id, round(val, 2)) for account_id, val in raw]
-    remainder = round(amount - sum(v for _, v in rounded), 2)
-    if remainder != 0 and rounded:
-        # Add remainder to the largest weight holder to keep totals exact.
-        largest = max(range(len(weights)), key=lambda i: weights[i][1])
-        account_id, current = rounded[largest]
-        rounded[largest] = (account_id, round(current + remainder, 2))
-    return [(aid, val) for aid, val in rounded if val > 0]
+def _create_loan_internal(
+    *,
+    session: Session,
+    group_id: int,
+    borrower_account_id: int,
+    principal: float,
+    term_months: int,
+    repayment_frequency: RepaymentFrequency,
+    interest_rate_percent: float | None,
+    description: str | None,
+) -> Loan:
+    group = session.get(Group, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
 
+    settings = session.get(GroupSettings, group_id) or GroupSettings(group_id=group_id)
+    borrower = session.get(Account, borrower_account_id)
+    if not borrower or borrower.group_id != group_id:
+        raise HTTPException(status_code=404, detail="Borrower not found in group")
 
-def _net_contributions_by_account(session: Session, *, group_id: int) -> dict[int, float]:
-    """Compute contributions as deposits minus withdrawals for each account in the group."""
-    account_ids = session.exec(select(Account.id).where(Account.group_id == group_id)).all()
-    if not account_ids:
-        return {}
+    rate = float(interest_rate_percent if interest_rate_percent is not None else settings.loan_interest_percent)
+    admin_fee_percent = float(settings.admin_fee_percent)
+    principal_value = float(principal)
+    if principal_value <= 0:
+        raise HTTPException(status_code=400, detail="Principal must be positive")
 
-    deposits = session.exec(
-        select(Transaction.account_id, func.coalesce(func.sum(Transaction.amount), 0))
-        .where(
-            Transaction.account_id.in_(account_ids),
-            Transaction.status == TransactionStatus.COMPLETED,
-            Transaction.type == TransactionType.DEPOSIT,
+    if settings.enforce_loan_limit:
+        contributions = net_contributions_by_account(session, group_id=group_id)
+        contribution = max(float(contributions.get(borrower.id, 0.0)), 0.0)
+        max_loan = contribution * float(settings.loan_limit_multiplier)
+        if principal_value > max_loan and max_loan > 0:
+            raise HTTPException(status_code=400, detail=f"Loan exceeds limit (max {max_loan:.2f})")
+
+    periods = _calc_periods(term_months, repayment_frequency)
+    total_interest = round(principal_value * (rate / 100.0), 2)
+    principal_each = round(principal_value / periods, 2)
+    interest_each = round(total_interest / periods, 2)
+    principal_last = round(principal_value - principal_each * (periods - 1), 2)
+    interest_last = round(total_interest - interest_each * (periods - 1), 2)
+
+    loan = Loan(
+        group_id=group_id,
+        borrower_account_id=borrower.id,
+        principal=principal_value,
+        interest_rate_percent=rate,
+        admin_fee_percent=admin_fee_percent,
+        term_months=term_months,
+        repayment_frequency=repayment_frequency,
+        outstanding_principal=principal_value,
+        outstanding_interest=total_interest,
+        status=LoanStatus.ACTIVE,
+        custom_fields={"description": description} if description else {},
+        created_at=datetime.utcnow(),
+        disbursed_at=datetime.utcnow(),
+    )
+    session.add(loan)
+    session.commit()
+    session.refresh(loan)
+
+    for idx in range(1, periods + 1):
+        installment = LoanInstallment(
+            loan_id=loan.id,
+            sequence=idx,
+            due_date=_schedule_due_date(loan.disbursed_at, frequency=repayment_frequency, step=idx),
+            principal_due=principal_last if idx == periods else principal_each,
+            interest_due=interest_last if idx == periods else interest_each,
+            status=InstallmentStatus.DUE,
         )
-        .group_by(Transaction.account_id)
-    ).all()
-    withdrawals = session.exec(
-        select(Transaction.account_id, func.coalesce(func.sum(Transaction.amount), 0))
-        .where(
-            Transaction.account_id.in_(account_ids),
-            Transaction.status == TransactionStatus.COMPLETED,
-            Transaction.type == TransactionType.WITHDRAWAL,
-        )
-        .group_by(Transaction.account_id)
-    ).all()
+        session.add(installment)
+    session.commit()
 
-    totals: dict[int, float] = {aid: 0.0 for aid in account_ids}
-    for aid, total in deposits:
-        totals[int(aid)] += float(total or 0)
-    for aid, total in withdrawals:
-        totals[int(aid)] -= float(total or 0)
-    return totals
+    tx = Transaction(
+        account_id=borrower.id,
+        amount=principal_value,
+        type=TransactionType.LOAN_DISBURSEMENT,
+        status=TransactionStatus.COMPLETED,
+        description=description or f"Loan disbursement (loan {loan.id})",
+        custom_fields={"loan_id": loan.id, "group_id": group_id},
+        created_at=datetime.utcnow(),
+    )
+    borrower.balance -= principal_value
+    borrower.updated_at = datetime.utcnow()
+    session.add(tx)
+    session.add(borrower)
+    session.commit()
+    session.refresh(loan)
+    return loan
+
+
+
 
 
 @router.get("/group/{group_id}", response_model=List[LoanRead])
@@ -140,6 +197,51 @@ def list_group_loans(
     return session.exec(statement).all()
 
 
+@router.get("/group/{group_id}/board", response_model=List[LoanBoardItem])
+def group_loan_board(
+    group_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
+) -> List[LoanBoardItem]:
+    membership = _require_group_access(session, group_id=group_id, user=current_user)
+    if not _is_platform_admin(current_user):
+        _require_terms(membership)
+
+    loans = session.exec(select(Loan).where(Loan.group_id == group_id).order_by(Loan.created_at.desc())).all()
+    if not loans:
+        return []
+
+    borrowers = session.exec(select(Account.id, Account.name).where(Account.group_id == group_id)).all()
+    borrower_names = {int(account_id): name for account_id, name in borrowers}
+
+    next_due = session.exec(
+        select(LoanInstallment.loan_id, func.min(LoanInstallment.due_date))
+        .where(LoanInstallment.loan_id.in_([loan.id for loan in loans]), LoanInstallment.status == InstallmentStatus.DUE)
+        .group_by(LoanInstallment.loan_id)
+    ).all()
+    next_due_map = {int(loan_id): due for loan_id, due in next_due}
+
+    items: List[LoanBoardItem] = []
+    for loan in loans:
+        items.append(
+            LoanBoardItem(
+                id=loan.id,
+                group_id=loan.group_id,
+                borrower_account_id=loan.borrower_account_id,
+                borrower_name=borrower_names.get(int(loan.borrower_account_id), f"Account {loan.borrower_account_id}"),
+                principal=float(loan.principal),
+                interest_rate_percent=float(loan.interest_rate_percent),
+                admin_fee_percent=float(loan.admin_fee_percent),
+                outstanding_principal=float(loan.outstanding_principal),
+                outstanding_interest=float(loan.outstanding_interest),
+                status=loan.status,
+                disbursed_at=loan.disbursed_at,
+                next_due_date=next_due_map.get(int(loan.id)),
+            )
+        )
+    return items
+
+
 @router.post("/group/{group_id}", response_model=LoanRead, status_code=201)
 def create_loan(
     group_id: int,
@@ -150,85 +252,124 @@ def create_loan(
     membership = _require_group_access(session, group_id=group_id, user=current_user)
     if not (_is_platform_admin(current_user) or membership.role == MembershipRole.ADMIN):
         raise HTTPException(status_code=403, detail="Group admins only")
+    return _create_loan_internal(
+        session=session,
+        group_id=group_id,
+        borrower_account_id=payload.borrower_account_id,
+        principal=float(payload.principal),
+        term_months=int(payload.term_months),
+        repayment_frequency=payload.repayment_frequency,
+        interest_rate_percent=payload.interest_rate_percent,
+        description=payload.description,
+    )
 
-    group = session.get(Group, group_id)
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
 
-    settings = session.get(GroupSettings, group_id) or GroupSettings(group_id=group_id)
-    borrower = session.get(Account, payload.borrower_account_id)
-    if not borrower or borrower.group_id != group_id:
-        raise HTTPException(status_code=404, detail="Borrower not found in group")
+@router.post("/group/{group_id}/requests", response_model=LoanRequestRead, status_code=201)
+def request_loan(
+    group_id: int,
+    payload: LoanRequestCreate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
+) -> LoanRequest:
+    membership = _get_membership(session, group_id=group_id, user_id=current_user.id)
+    if not membership or not membership.is_active:
+        raise HTTPException(status_code=403, detail="Not a group member")
+    _require_terms(membership)
+    if not membership.account_id:
+        raise HTTPException(status_code=400, detail="No linked member account")
 
-    rate = float(payload.interest_rate_percent if payload.interest_rate_percent is not None else settings.loan_interest_percent)
-    admin_fee_percent = float(settings.admin_fee_percent)
     principal = float(payload.principal)
     if principal <= 0:
         raise HTTPException(status_code=400, detail="Principal must be positive")
+    if int(payload.term_months or 1) < 1:
+        raise HTTPException(status_code=400, detail="term_months must be >= 1")
 
-    if settings.enforce_loan_limit:
-        contributions = _net_contributions_by_account(session, group_id=group_id)
-        contribution = max(float(contributions.get(borrower.id, 0.0)), 0.0)
-        max_loan = contribution * float(settings.loan_limit_multiplier)
-        if principal > max_loan and max_loan > 0:
-            raise HTTPException(status_code=400, detail=f"Loan exceeds limit (max {max_loan:.2f})")
+    settings = session.get(GroupSettings, group_id) or GroupSettings(group_id=group_id)
+    if settings.constitution_locked_at is None:
+        raise HTTPException(status_code=400, detail="Constitution is not locked yet for this cycle")
 
-    periods = _calc_periods(payload.term_months, payload.repayment_frequency)
-    total_interest = round(principal * (rate / 100.0), 2)
-    principal_each = round(principal / periods, 2)
-    interest_each = round(total_interest / periods, 2)
-    # Fix rounding drift on last installment.
-    principal_last = round(principal - principal_each * (periods - 1), 2)
-    interest_last = round(total_interest - interest_each * (periods - 1), 2)
-
-    loan = Loan(
-        group_id=group_id,
-        borrower_account_id=borrower.id,
-        principal=principal,
-        interest_rate_percent=rate,
-        admin_fee_percent=admin_fee_percent,
-        term_months=payload.term_months,
-        repayment_frequency=payload.repayment_frequency,
-        outstanding_principal=principal,
-        outstanding_interest=total_interest,
-        status=LoanStatus.ACTIVE,
-        custom_fields={"description": payload.description} if payload.description else {},
-        created_at=datetime.utcnow(),
-        disbursed_at=datetime.utcnow(),
-    )
-    session.add(loan)
-    session.commit()
-    session.refresh(loan)
-
-    for idx in range(1, periods + 1):
-        installment = LoanInstallment(
-            loan_id=loan.id,
-            sequence=idx,
-            due_date=_schedule_due_date(loan.disbursed_at, frequency=payload.repayment_frequency, step=idx),
-            principal_due=principal_last if idx == periods else principal_each,
-            interest_due=interest_last if idx == periods else interest_each,
-            status=InstallmentStatus.DUE,
+    existing = session.exec(
+        select(LoanRequest).where(
+            LoanRequest.group_id == group_id,
+            LoanRequest.borrower_account_id == int(membership.account_id),
+            LoanRequest.status.in_([LoanRequestStatus.REQUESTED, LoanRequestStatus.QUEUED]),
         )
-        session.add(installment)
-    session.commit()
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="You already have a pending loan request")
 
-    # Disbursement is recorded as a transaction for audit.
-    tx = Transaction(
-        account_id=borrower.id,
-        amount=principal,
-        type=TransactionType.LOAN_DISBURSEMENT,
-        status=TransactionStatus.COMPLETED,
-        description=payload.description or f"Loan disbursement (loan {loan.id})",
-        custom_fields={"loan_id": loan.id, "group_id": group_id},
+    req = LoanRequest(
+        group_id=group_id,
+        borrower_account_id=int(membership.account_id),
+        requester_user_id=int(current_user.id),
+        principal=principal,
+        term_months=int(payload.term_months or 1),
+        repayment_frequency=payload.repayment_frequency,
+        status=LoanRequestStatus.REQUESTED,
+        description=payload.description,
         created_at=datetime.utcnow(),
     )
-    borrower.balance -= principal
-    borrower.updated_at = datetime.utcnow()
-    session.add(tx)
-    session.add(borrower)
+    session.add(req)
     session.commit()
-    session.refresh(loan)
-    return loan
+    session.refresh(req)
+    req = auto_decide_and_apply(session=session, request=req, settings=settings)
+    return req
+
+
+@router.get("/group/{group_id}/requests", response_model=List[LoanRequestRead])
+def list_loan_requests(
+    group_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
+) -> List[LoanRequest]:
+    membership = _get_membership(session, group_id=group_id, user_id=current_user.id)
+    is_admin = _is_platform_admin(current_user) or (membership is not None and membership.role == MembershipRole.ADMIN)
+
+    if not is_admin:
+        if not membership:
+            raise HTTPException(status_code=403, detail="Not a group member")
+        _require_terms(membership)
+        statement = (
+            select(LoanRequest)
+            .where(LoanRequest.group_id == group_id, LoanRequest.requester_user_id == current_user.id)
+            .order_by(LoanRequest.created_at.desc())
+        )
+        return session.exec(statement).all()
+
+    statement = select(LoanRequest).where(LoanRequest.group_id == group_id).order_by(LoanRequest.created_at.desc())
+    return session.exec(statement).all()
+
+
+@router.post("/requests/{request_id}/cancel", response_model=LoanRequestRead)
+def cancel_loan_request(
+    request_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
+) -> LoanRequest:
+    req = session.get(LoanRequest, request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Loan request not found")
+    if req.requester_user_id != current_user.id and not _is_platform_admin(current_user):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    if req.status not in {LoanRequestStatus.REQUESTED, LoanRequestStatus.QUEUED}:
+        raise HTTPException(status_code=400, detail="Only pending loan requests can be canceled")
+    req.status = LoanRequestStatus.CANCELED
+    req.decided_at = datetime.utcnow()
+    req.decided_by_user_id = int(current_user.id)
+    session.add(req)
+    session.commit()
+    session.refresh(req)
+    return req
+
+
+@router.patch("/requests/{request_id}", response_model=LoanRequestRead)
+def decide_loan_request(
+    request_id: int,
+    payload: LoanRequestDecision,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
+) -> LoanRequest:
+    raise HTTPException(status_code=400, detail="Manual loan request approvals are disabled (autonomous lending)")
 
 
 @router.get("/{loan_id}/schedule", response_model=List[LoanInstallmentRead])
@@ -351,9 +492,9 @@ def repay_loan(
             session.add(GroupFee(group_id=loan.group_id, amount=admin_fee, created_at=now))
 
         if distributable > 0:
-            contributions = _net_contributions_by_account(session, group_id=loan.group_id)
+            contributions = net_contributions_by_account(session, group_id=loan.group_id)
             weights = [(account_id, max(amount_contributed, 0.0)) for account_id, amount_contributed in contributions.items()]
-            allocations = _round_allocations(distributable, weights)
+            allocations = round_allocations(distributable, weights)
             for account_id, amount_alloc in allocations:
                 tx = Transaction(
                     account_id=account_id,
@@ -378,4 +519,5 @@ def repay_loan(
         session.commit()
 
     session.refresh(loan)
+    process_queued_requests(session, group_id=loan.group_id)
     return loan
