@@ -17,8 +17,11 @@ export function createAppTheme(mode: ColorMode) {
         default: isDark ? "#0b1220" : "#f6f7fb",
         paper: isDark ? "#0f172a" : "#ffffff",
       },
-      text: isDark ? { primary: "#e5e7eb", secondary: "rgba(229,231,235,0.72)" } : undefined,
-      divider: isDark ? "rgba(148,163,184,0.18)" : undefined,
+      text: {
+        primary: isDark ? "#e5e7eb" : "#0f172a",
+        secondary: isDark ? "rgba(229,231,235,0.72)" : "rgba(15,23,42,0.7)",
+      },
+      divider: isDark ? "rgba(148,163,184,0.18)" : "rgba(15,23,42,0.08)",
     },
     shape: {
       borderRadius: 12,
