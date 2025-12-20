@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Alert,
@@ -11,12 +11,10 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
-  FormControlLabel,
   Grid,
   InputLabel,
   MenuItem,
   Select,
-  Switch,
   TextField,
 } from "@mui/material";
 import DashboardIcon from "@mui/icons-material/Dashboard";
@@ -27,20 +25,17 @@ import GavelIcon from "@mui/icons-material/Gavel";
 import AddIcon from "@mui/icons-material/Add";
 import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
 
-import { DataGrid, GridToolbar, type GridColDef } from "@mui/x-data-grid";
-
 import { Api } from "../api";
-import { ScorecardDialog, type ScorecardItem } from "../components/ScorecardDialog";
-import { PageHeader } from "../components/PageHeader";
-import { ConfirmDialog } from "../components/ConfirmDialog";
 import { AppShell, type NavItem } from "../layout/AppShell";
 import { StatCard } from "../components/StatCard";
-import { StatusChip } from "../components/StatusChip";
-import { currency, formatDateTime } from "../lib/format";
+import { currency } from "../lib/format";
 import { useColorMode } from "../colorMode";
+import { AdminContext, type AdminContextValue } from "./adminContext";
 import type {
   Account,
+  DashboardStats,
   Group,
+  GroupContributionItem,
   GroupSettingsUpdatePayload,
   GroupWithSettings,
   Loan,
@@ -49,31 +44,6 @@ import type {
   MemberInvitePayload,
   User,
 } from "../types";
-
-type AdminContextValue = {
-  busy: boolean;
-  groups: Group[];
-  selectedGroupId: number | "";
-  group: GroupWithSettings | null;
-  members: Account[];
-  loans: Loan[];
-  requests: LoanRequest[];
-  constitutionLocked: boolean;
-  refresh: (groupId?: number) => Promise<void>;
-  openInvite: () => void;
-  openManualLoan: () => void;
-  openCreateGroup: () => void;
-  saveSettings: (payload: GroupSettingsUpdatePayload) => Promise<void>;
-  lockConstitution: () => Promise<void>;
-};
-
-const AdminContext = createContext<AdminContextValue | null>(null);
-
-export function useAdmin() {
-  const ctx = useContext(AdminContext);
-  if (!ctx) throw new Error("useAdmin must be used inside AdminLayout");
-  return ctx;
-}
 
 const GROUP_STORAGE_KEY = "vb_selected_group";
 
@@ -98,6 +68,8 @@ export function AdminLayout({
   });
   const [group, setGroup] = useState<GroupWithSettings | null>(null);
   const [members, setMembers] = useState<Account[]>([]);
+  const [contributions, setContributions] = useState<GroupContributionItem[]>([]);
+  const [dashboard, setDashboard] = useState<DashboardStats | null>(null);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [requests, setRequests] = useState<LoanRequest[]>([]);
   const [busy, setBusy] = useState(false);
@@ -140,6 +112,8 @@ export function AdminLayout({
         setSelectedGroupId("");
         setGroup(null);
         setMembers([]);
+        setContributions([]);
+        setDashboard(null);
         setLoans([]);
         setRequests([]);
         return;
@@ -148,14 +122,18 @@ export function AdminLayout({
       setSelectedGroupId(resolved);
       localStorage.setItem(GROUP_STORAGE_KEY, String(resolved));
 
-      const [details, accounts, groupLoans, loanRequests] = await Promise.all([
+      const [details, accounts, contrib, stats, groupLoans, loanRequests] = await Promise.all([
         Api.getGroup(resolved),
         Api.getGroupAccounts(resolved),
+        Api.getGroupContributions(resolved).catch(() => []),
+        Api.getDashboardForGroup(resolved).catch(() => null),
         Api.getGroupLoans(resolved),
         Api.listLoanRequests(resolved),
       ]);
       setGroup(details);
       setMembers(accounts);
+      setContributions(contrib);
+      setDashboard(stats);
       setLoans(groupLoans);
       setRequests(loanRequests);
     } catch (err) {
@@ -294,6 +272,8 @@ export function AdminLayout({
     selectedGroupId,
     group,
     members,
+    contributions,
+    dashboard,
     loans,
     requests,
     constitutionLocked,
@@ -484,320 +464,5 @@ export function AdminLayout({
         </Dialog>
       </AppShell>
     </AdminContext.Provider>
-  );
-}
-
-export function AdminOverviewPage() {
-  const { group, constitutionLocked } = useAdmin();
-  if (!group) return null;
-  return (
-    <Box>
-      <PageHeader
-        title={group.name}
-        subtitle={
-          constitutionLocked
-            ? `Constitution locked at ${formatDateTime(group.settings.constitution_locked_at)}`
-            : "Constitution is not locked yet. Lock it to enable autonomous lending."
-        }
-      />
-    </Box>
-  );
-}
-
-export function AdminMembersPage() {
-  const { busy, members, openInvite } = useAdmin();
-  const columns: GridColDef<Account>[] = useMemo(
-    () => [
-      { field: "name", headerName: "Member", flex: 1, minWidth: 180 },
-      { field: "email", headerName: "Email", flex: 1, minWidth: 220 },
-      { field: "balance", headerName: "Savings", minWidth: 140, valueFormatter: (v) => currency(Number(v)) },
-    ],
-    []
-  );
-  return (
-    <Box>
-      <PageHeader
-        title="Members"
-        subtitle="Manage membership for this group."
-        action={
-          <Button variant="contained" startIcon={<PersonAddAlt1Icon />} onClick={openInvite}>
-            Add member
-          </Button>
-        }
-      />
-      {members.length === 0 && (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          No members yet. Add your first member to start contributions and enable lending.
-        </Alert>
-      )}
-      <Box height={520}>
-        <DataGrid
-          rows={members}
-          columns={columns}
-          disableRowSelectionOnClick
-          loading={busy}
-          getRowId={(row) => row.id}
-          pageSizeOptions={[10, 25, 50]}
-          initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } }, density: "compact" }}
-          slots={{ toolbar: GridToolbar }}
-          slotProps={{ toolbar: { showQuickFilter: true, quickFilterProps: { debounceMs: 250 } } }}
-        />
-      </Box>
-    </Box>
-  );
-}
-
-export function AdminLoansPage() {
-  const { busy, loans, constitutionLocked, openManualLoan, members } = useAdmin();
-  const memberNameByAccountId = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const m of members) map.set(Number(m.id), m.name);
-    return map;
-  }, [members]);
-  const columns: GridColDef<Loan>[] = useMemo(
-    () => [
-      { field: "id", headerName: "Loan", width: 90 },
-      {
-        field: "borrower_account_id",
-        headerName: "Borrower",
-        width: 200,
-        valueGetter: (_, row) => memberNameByAccountId.get(Number(row.borrower_account_id)) ?? `Account ${row.borrower_account_id}`,
-      },
-      { field: "principal", headerName: "Principal", width: 140, valueFormatter: (v) => currency(Number(v)) },
-      {
-        field: "outstanding_principal",
-        headerName: "Outstanding",
-        width: 160,
-        valueGetter: (_, row) => Number(row.outstanding_principal) + Number(row.outstanding_interest),
-        valueFormatter: (v) => currency(Number(v)),
-      },
-      { field: "status", headerName: "Status", width: 120, renderCell: ({ value }) => <StatusChip value={String(value)} /> },
-    ],
-    [memberNameByAccountId]
-  );
-  return (
-    <Box>
-      <PageHeader
-        title="Loans"
-        subtitle="View active and historical loans."
-        action={
-          <Button variant="contained" startIcon={<CreditCardIcon />} disabled={constitutionLocked} onClick={openManualLoan}>
-            Manual loan
-          </Button>
-        }
-      />
-      {constitutionLocked && (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          Manual loans are disabled because the constitution is locked (autonomous lending).
-        </Alert>
-      )}
-      <Box height={520}>
-        <DataGrid
-          rows={loans}
-          columns={columns}
-          disableRowSelectionOnClick
-          loading={busy}
-          getRowId={(row) => row.id}
-          pageSizeOptions={[10, 25, 50]}
-          initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } }, density: "compact" }}
-          slots={{ toolbar: GridToolbar }}
-          slotProps={{ toolbar: { showQuickFilter: true, quickFilterProps: { debounceMs: 250 } } }}
-        />
-      </Box>
-    </Box>
-  );
-}
-
-export function AdminRequestsPage() {
-  const { busy, requests, members } = useAdmin();
-  const [scorecardOpen, setScorecardOpen] = useState(false);
-  const [scorecard, setScorecard] = useState<ScorecardItem[] | null>(null);
-
-  const memberNameByAccountId = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const m of members) map.set(Number(m.id), m.name);
-    return map;
-  }, [members]);
-
-  const columns: GridColDef<LoanRequest>[] = useMemo(
-    () => [
-      { field: "id", headerName: "Request", width: 110 },
-      {
-        field: "borrower_account_id",
-        headerName: "Borrower",
-        width: 200,
-        valueGetter: (_, row) => memberNameByAccountId.get(Number(row.borrower_account_id)) ?? `Account ${row.borrower_account_id}`,
-      },
-      { field: "principal", headerName: "Principal", width: 140, valueFormatter: (v) => currency(Number(v)) },
-      { field: "term_months", headerName: "Term", width: 100, valueFormatter: (v) => `${Number(v)} mo` },
-      { field: "repayment_frequency", headerName: "Frequency", width: 120 },
-      { field: "status", headerName: "Status", width: 120, renderCell: ({ value }) => <StatusChip value={String(value)} /> },
-      {
-        field: "approved_loan_id",
-        headerName: "Loan",
-        width: 100,
-        valueGetter: (_, row) => (row.custom_fields?.approved_loan_id ? `#${row.custom_fields.approved_loan_id}` : ""),
-      },
-      {
-        field: "scorecard",
-        headerName: "Scorecard",
-        width: 120,
-        sortable: false,
-        filterable: false,
-        renderCell: ({ row }) => {
-          const items = row.custom_fields?.scorecard as ScorecardItem[] | undefined;
-          if (!items?.length) return null;
-          return (
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={() => {
-                setScorecard(items);
-                setScorecardOpen(true);
-              }}
-            >
-              View
-            </Button>
-          );
-        },
-      },
-      { field: "decision_reason", headerName: "Reason", flex: 1, minWidth: 240, valueGetter: (_, row) => row.decision_reason ?? "" },
-      { field: "created_at", headerName: "Created", width: 170, valueFormatter: (v) => formatDateTime(String(v)) },
-    ],
-    [memberNameByAccountId]
-  );
-  return (
-    <Box>
-      <PageHeader title="Requests" subtitle="Auto-decisions (approve/reject/queue) with transparent reasons." />
-      <Alert severity="info" sx={{ mb: 2 }}>
-        Requests are auto-approved, rejected, or queued by the constitution. There is no manual approval step.
-      </Alert>
-      <Box height={520}>
-        <DataGrid
-          rows={requests}
-          columns={columns}
-          disableRowSelectionOnClick
-          loading={busy}
-          getRowId={(row) => row.id}
-          pageSizeOptions={[10, 25, 50]}
-          initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } }, density: "compact" }}
-          slots={{ toolbar: GridToolbar }}
-          slotProps={{ toolbar: { showQuickFilter: true, quickFilterProps: { debounceMs: 250 } } }}
-        />
-      </Box>
-      <ScorecardDialog open={scorecardOpen} onClose={() => setScorecardOpen(false)} scorecard={scorecard} />
-    </Box>
-  );
-}
-
-export function AdminSettingsPage() {
-  const { group, busy, constitutionLocked, saveSettings, lockConstitution } = useAdmin();
-  const [draft, setDraft] = useState<GroupSettingsUpdatePayload>(() => ({}));
-  const [confirmOpen, setConfirmOpen] = useState(false);
-
-  useEffect(() => {
-    if (!group) return;
-    setDraft({
-      min_monthly_contribution: group.settings.min_monthly_contribution,
-      admin_fee_percent: group.settings.admin_fee_percent,
-      loan_interest_percent: group.settings.loan_interest_percent,
-      enforce_loan_limit: group.settings.enforce_loan_limit,
-      loan_limit_multiplier: group.settings.loan_limit_multiplier,
-      liquidity_max_outstanding_percent: group.settings.liquidity_max_outstanding_percent,
-      min_term_months: group.settings.min_term_months,
-      max_term_months: group.settings.max_term_months,
-      max_active_loans_per_member: group.settings.max_active_loans_per_member,
-      cooldown_days_after_settlement: group.settings.cooldown_days_after_settlement,
-      withdrawal_cycle_days: group.settings.withdrawal_cycle_days,
-      allow_advance_contribution: group.settings.allow_advance_contribution,
-    });
-  }, [group]);
-
-  if (!group) return null;
-
-  return (
-    <Box>
-      <PageHeader
-        title="Constitution (cycle rules)"
-        subtitle={
-          constitutionLocked
-            ? `Locked at ${formatDateTime(group.settings.constitution_locked_at)}. Only corrections via reversals are allowed.`
-            : "Set rules for this cycle, then lock them to enable autonomous lending."
-        }
-      />
-
-      <Grid container spacing={2} sx={{ mb: 2 }}>
-        <Grid item xs={12} md={6}>
-          <TextField label="Minimum monthly contribution" type="number" fullWidth disabled={busy || constitutionLocked} value={draft.min_monthly_contribution ?? 0} onChange={(e) => setDraft((p) => ({ ...p, min_monthly_contribution: Number(e.target.value) }))} />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField label="Admin fee (% of loan interest)" type="number" fullWidth disabled={busy || constitutionLocked} value={draft.admin_fee_percent ?? 0} onChange={(e) => setDraft((p) => ({ ...p, admin_fee_percent: Number(e.target.value) }))} />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField label="Loan interest (%)" type="number" fullWidth disabled={busy || constitutionLocked} value={draft.loan_interest_percent ?? 10} onChange={(e) => setDraft((p) => ({ ...p, loan_interest_percent: Number(e.target.value) }))} />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <FormControlLabel
-            control={<Switch checked={draft.enforce_loan_limit ?? true} disabled={busy || constitutionLocked} onChange={(e) => setDraft((p) => ({ ...p, enforce_loan_limit: e.target.checked }))} />}
-            label="Enforce loan limit"
-          />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField label="Loan limit multiplier" type="number" fullWidth disabled={busy || constitutionLocked} value={draft.loan_limit_multiplier ?? 2} onChange={(e) => setDraft((p) => ({ ...p, loan_limit_multiplier: Number(e.target.value) }))} helperText={(draft.enforce_loan_limit ?? true) ? "Max loan = contribution x multiplier" : "Loan limit disabled"} />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField label="Liquidity cap (% outstanding)" type="number" fullWidth disabled={busy || constitutionLocked} value={draft.liquidity_max_outstanding_percent ?? 80} onChange={(e) => setDraft((p) => ({ ...p, liquidity_max_outstanding_percent: Number(e.target.value) }))} helperText="Total outstanding principal must stay below this % of the pool" />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField label="Min term (months)" type="number" fullWidth disabled={busy || constitutionLocked} value={draft.min_term_months ?? 1} onChange={(e) => setDraft((p) => ({ ...p, min_term_months: Number(e.target.value) }))} />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField label="Max term (months)" type="number" fullWidth disabled={busy || constitutionLocked} value={draft.max_term_months ?? 12} onChange={(e) => setDraft((p) => ({ ...p, max_term_months: Number(e.target.value) }))} />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField label="Max active loans per member" type="number" fullWidth disabled={busy || constitutionLocked} value={draft.max_active_loans_per_member ?? 1} onChange={(e) => setDraft((p) => ({ ...p, max_active_loans_per_member: Number(e.target.value) }))} />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField label="Cooldown after settlement (days)" type="number" fullWidth disabled={busy || constitutionLocked} value={draft.cooldown_days_after_settlement ?? 0} onChange={(e) => setDraft((p) => ({ ...p, cooldown_days_after_settlement: Number(e.target.value) }))} />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <TextField label="Withdrawal cycle (days)" type="number" fullWidth disabled={busy || constitutionLocked} value={draft.withdrawal_cycle_days ?? 30} onChange={(e) => setDraft((p) => ({ ...p, withdrawal_cycle_days: Number(e.target.value) }))} />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <FormControlLabel
-            control={<Switch checked={draft.allow_advance_contribution ?? true} disabled={busy || constitutionLocked} onChange={(e) => setDraft((p) => ({ ...p, allow_advance_contribution: e.target.checked }))} />}
-            label="Allow advance contributions"
-          />
-        </Grid>
-      </Grid>
-
-      <Box display="flex" justifyContent="space-between">
-        <Button
-          variant="outlined"
-          color="warning"
-          disabled={busy || constitutionLocked}
-          onClick={() => setConfirmOpen(true)}
-        >
-          Lock constitution
-        </Button>
-        <Button variant="contained" disabled={busy || constitutionLocked} onClick={() => void saveSettings(draft)}>
-          Save
-        </Button>
-      </Box>
-
-      <ConfirmDialog
-        open={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
-        title="Lock constitution?"
-        description="This locks the rules for the cycle. Members can request loans, and decisions become fully automatic. You cannot edit these settings after locking."
-        confirmLabel="Lock"
-        confirmColor="warning"
-        busy={busy}
-        onConfirm={async () => {
-          setConfirmOpen(false);
-          await lockConstitution();
-        }}
-      />
-    </Box>
   );
 }

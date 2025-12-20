@@ -9,23 +9,19 @@ import type { User } from "./types";
 const TOKEN_STORAGE_KEY = "vb_token";
 
 const AdminLayout = lazy(() => import("./admin/AdminLayout").then((m) => ({ default: m.AdminLayout })));
-const AdminOverviewPage = lazy(() => import("./admin/AdminLayout").then((m) => ({ default: m.AdminOverviewPage })));
-const AdminMembersPage = lazy(() => import("./admin/AdminLayout").then((m) => ({ default: m.AdminMembersPage })));
-const AdminLoansPage = lazy(() => import("./admin/AdminLayout").then((m) => ({ default: m.AdminLoansPage })));
-const AdminRequestsPage = lazy(() => import("./admin/AdminLayout").then((m) => ({ default: m.AdminRequestsPage })));
-const AdminSettingsPage = lazy(() => import("./admin/AdminLayout").then((m) => ({ default: m.AdminSettingsPage })));
+const AdminOverviewPage = lazy(() => import("./admin/pages/AdminOverviewPage"));
+const AdminMembersPage = lazy(() => import("./admin/pages/AdminMembersPage"));
+const AdminLoansPage = lazy(() => import("./admin/pages/AdminLoansPage"));
+const AdminRequestsPage = lazy(() => import("./admin/pages/AdminRequestsPage"));
+const AdminSettingsPage = lazy(() => import("./admin/pages/AdminSettingsPage"));
 
 const MemberLayout = lazy(() => import("./member/MemberLayout").then((m) => ({ default: m.MemberLayout })));
-const MemberOverviewPage = lazy(() => import("./member/MemberLayout").then((m) => ({ default: m.MemberOverviewPage })));
-const MemberTransactionsPage = lazy(() =>
-  import("./member/MemberLayout").then((m) => ({ default: m.MemberTransactionsPage }))
-);
-const MemberRequestsPage = lazy(() => import("./member/MemberLayout").then((m) => ({ default: m.MemberRequestsPage })));
-const MemberMyLoansPage = lazy(() => import("./member/MemberLayout").then((m) => ({ default: m.MemberMyLoansPage })));
-const MemberGroupLoansPage = lazy(() =>
-  import("./member/MemberLayout").then((m) => ({ default: m.MemberGroupLoansPage }))
-);
-const MemberSharesPage = lazy(() => import("./member/MemberLayout").then((m) => ({ default: m.MemberSharesPage })));
+const MemberOverviewPage = lazy(() => import("./member/pages/MemberOverviewPage"));
+const MemberTransactionsPage = lazy(() => import("./member/pages/MemberTransactionsPage"));
+const MemberRequestsPage = lazy(() => import("./member/pages/MemberRequestsPage"));
+const MemberMyLoansPage = lazy(() => import("./member/pages/MemberMyLoansPage"));
+const MemberGroupLoansPage = lazy(() => import("./member/pages/MemberGroupLoansPage"));
+const MemberSharesPage = lazy(() => import("./member/pages/MemberSharesPage"));
 
 function FullScreenLoader() {
   return (
