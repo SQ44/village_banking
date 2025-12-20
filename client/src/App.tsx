@@ -1,29 +1,31 @@
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Alert, Box, CircularProgress, Snackbar } from "@mui/material";
 
 import { Api } from "./api";
 import { LoginPage } from "./pages/LoginPage";
-import {
-  AdminLayout,
-  AdminLoansPage,
-  AdminMembersPage,
-  AdminOverviewPage,
-  AdminRequestsPage,
-  AdminSettingsPage,
-} from "./admin/AdminLayout";
-import {
-  MemberGroupLoansPage,
-  MemberLayout,
-  MemberMyLoansPage,
-  MemberOverviewPage,
-  MemberRequestsPage,
-  MemberSharesPage,
-  MemberTransactionsPage,
-} from "./member/MemberLayout";
 import type { User } from "./types";
 
 const TOKEN_STORAGE_KEY = "vb_token";
+
+const AdminLayout = lazy(() => import("./admin/AdminLayout").then((m) => ({ default: m.AdminLayout })));
+const AdminOverviewPage = lazy(() => import("./admin/AdminLayout").then((m) => ({ default: m.AdminOverviewPage })));
+const AdminMembersPage = lazy(() => import("./admin/AdminLayout").then((m) => ({ default: m.AdminMembersPage })));
+const AdminLoansPage = lazy(() => import("./admin/AdminLayout").then((m) => ({ default: m.AdminLoansPage })));
+const AdminRequestsPage = lazy(() => import("./admin/AdminLayout").then((m) => ({ default: m.AdminRequestsPage })));
+const AdminSettingsPage = lazy(() => import("./admin/AdminLayout").then((m) => ({ default: m.AdminSettingsPage })));
+
+const MemberLayout = lazy(() => import("./member/MemberLayout").then((m) => ({ default: m.MemberLayout })));
+const MemberOverviewPage = lazy(() => import("./member/MemberLayout").then((m) => ({ default: m.MemberOverviewPage })));
+const MemberTransactionsPage = lazy(() =>
+  import("./member/MemberLayout").then((m) => ({ default: m.MemberTransactionsPage }))
+);
+const MemberRequestsPage = lazy(() => import("./member/MemberLayout").then((m) => ({ default: m.MemberRequestsPage })));
+const MemberMyLoansPage = lazy(() => import("./member/MemberLayout").then((m) => ({ default: m.MemberMyLoansPage })));
+const MemberGroupLoansPage = lazy(() =>
+  import("./member/MemberLayout").then((m) => ({ default: m.MemberGroupLoansPage }))
+);
+const MemberSharesPage = lazy(() => import("./member/MemberLayout").then((m) => ({ default: m.MemberSharesPage })));
 
 function FullScreenLoader() {
   return (
@@ -106,46 +108,52 @@ export default function App() {
 
   return (
     <>
-      <Routes>
-        <Route
-          path="/login"
-          element={
-            token && currentUser ? <Navigate to={homePath} replace /> : <LoginPage busy={authBusy} onLogin={handleLogin} />
-          }
-        />
+      <Suspense fallback={<FullScreenLoader />}>
+        <Routes>
+          <Route
+            path="/login"
+            element={
+              token && currentUser ? (
+                <Navigate to={homePath} replace />
+              ) : (
+                <LoginPage busy={authBusy} onLogin={handleLogin} />
+              )
+            }
+          />
 
-        <Route
-          path="/admin"
-          element={
-            requireAuth("admin") ?? <AdminLayout currentUser={currentUser!} onLogout={logout} onError={onError} />
-          }
-        >
-          <Route path="overview" element={<AdminOverviewPage />} />
-          <Route path="members" element={<AdminMembersPage />} />
-          <Route path="loans" element={<AdminLoansPage />} />
-          <Route path="requests" element={<AdminRequestsPage />} />
-          <Route path="settings" element={<AdminSettingsPage />} />
-          <Route path="*" element={<Navigate to="overview" replace />} />
-        </Route>
+          <Route
+            path="/admin"
+            element={
+              requireAuth("admin") ?? <AdminLayout currentUser={currentUser!} onLogout={logout} onError={onError} />
+            }
+          >
+            <Route path="overview" element={<AdminOverviewPage />} />
+            <Route path="members" element={<AdminMembersPage />} />
+            <Route path="loans" element={<AdminLoansPage />} />
+            <Route path="requests" element={<AdminRequestsPage />} />
+            <Route path="settings" element={<AdminSettingsPage />} />
+            <Route path="*" element={<Navigate to="overview" replace />} />
+          </Route>
 
-        <Route
-          path="/member"
-          element={
-            requireAuth("member") ?? <MemberLayout currentUser={currentUser!} onLogout={logout} onError={onError} />
-          }
-        >
-          <Route path="overview" element={<MemberOverviewPage />} />
-          <Route path="transactions" element={<MemberTransactionsPage />} />
-          <Route path="requests" element={<MemberRequestsPage />} />
-          <Route path="my-loans" element={<MemberMyLoansPage />} />
-          <Route path="group-loans" element={<MemberGroupLoansPage />} />
-          <Route path="shares" element={<MemberSharesPage />} />
-          <Route path="*" element={<Navigate to="overview" replace />} />
-        </Route>
+          <Route
+            path="/member"
+            element={
+              requireAuth("member") ?? <MemberLayout currentUser={currentUser!} onLogout={logout} onError={onError} />
+            }
+          >
+            <Route path="overview" element={<MemberOverviewPage />} />
+            <Route path="transactions" element={<MemberTransactionsPage />} />
+            <Route path="requests" element={<MemberRequestsPage />} />
+            <Route path="my-loans" element={<MemberMyLoansPage />} />
+            <Route path="group-loans" element={<MemberGroupLoansPage />} />
+            <Route path="shares" element={<MemberSharesPage />} />
+            <Route path="*" element={<Navigate to="overview" replace />} />
+          </Route>
 
-        <Route path="/" element={<Navigate to={homePath} replace />} />
-        <Route path="*" element={<Navigate to={homePath} replace />} />
-      </Routes>
+          <Route path="/" element={<Navigate to={homePath} replace />} />
+          <Route path="*" element={<Navigate to={homePath} replace />} />
+        </Routes>
+      </Suspense>
 
       <Snackbar open={!!snack} autoHideDuration={6000} onClose={() => setSnack(null)} anchorOrigin={{ vertical: "bottom", horizontal: "center" }}>
         <Alert severity="error" onClose={() => setSnack(null)}>
@@ -155,4 +163,3 @@ export default function App() {
     </>
   );
 }
-

@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -17,7 +18,6 @@ import {
   Select,
   Switch,
   TextField,
-  Typography,
 } from "@mui/material";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import GroupIcon from "@mui/icons-material/Group";
@@ -27,14 +27,17 @@ import GavelIcon from "@mui/icons-material/Gavel";
 import AddIcon from "@mui/icons-material/Add";
 import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
 
-import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { DataGrid, GridToolbar, type GridColDef } from "@mui/x-data-grid";
 
 import { Api } from "../api";
 import { ScorecardDialog, type ScorecardItem } from "../components/ScorecardDialog";
+import { PageHeader } from "../components/PageHeader";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { AppShell, type NavItem } from "../layout/AppShell";
 import { StatCard } from "../components/StatCard";
 import { StatusChip } from "../components/StatusChip";
 import { currency, formatDateTime } from "../lib/format";
+import { useColorMode } from "../colorMode";
 import type {
   Account,
   Group,
@@ -85,6 +88,7 @@ export function AdminLayout({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const { mode, toggle } = useColorMode();
 
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<number | "">(() => {
@@ -193,9 +197,19 @@ export function AdminLayout({
   const header = (
     <Box display="flex" alignItems="center" gap={1} width="100%" minWidth={0}>
       <Box minWidth={260} maxWidth={520} flex={1}>
-        <FormControl
-          fullWidth
+        <Autocomplete
           size="small"
+          options={groups}
+          value={groups.find((g) => g.id === Number(selectedGroupId)) ?? null}
+          getOptionLabel={(option) => option.name}
+          isOptionEqualToValue={(a, b) => a.id === b.id}
+          disableClearable={groups.length > 0}
+          onChange={(_, value) => void refresh(value?.id)}
+          renderInput={(params) => <TextField {...params} label="Group" placeholder="Search groups..." />}
+          slotProps={{
+            popper: { sx: { zIndex: (t) => t.zIndex.modal + 1 } },
+            paper: { sx: { borderRadius: 2, mt: 1, border: "1px solid rgba(15, 23, 42, 0.10)" } },
+          }}
           sx={{
             "& .MuiOutlinedInput-root": {
               backgroundColor: "background.paper",
@@ -203,21 +217,7 @@ export function AdminLayout({
               boxShadow: "0 1px 2px rgba(15,23,42,0.06)",
             },
           }}
-        >
-          <InputLabel id="group-select-label">Group</InputLabel>
-          <Select
-            labelId="group-select-label"
-            value={selectedGroupId}
-            label="Group"
-            onChange={(e) => void refresh(Number(e.target.value))}
-          >
-            {groups.map((g) => (
-              <MenuItem key={g.id} value={g.id}>
-                {g.name}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        />
       </Box>
       {selectedGroupId && (
         <Chip
@@ -232,19 +232,40 @@ export function AdminLayout({
 
   const actions = (
     <>
-      <Button startIcon={<AddIcon />} variant="contained" onClick={openCreateGroup}>
-        New group
+      <Button
+        startIcon={<AddIcon />}
+        variant="contained"
+        onClick={openCreateGroup}
+        aria-label="New group"
+        sx={{ "& .MuiButton-startIcon": { mr: { xs: 0, sm: 1 } } }}
+      >
+        <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>
+          New group
+        </Box>
       </Button>
-      <Button startIcon={<PersonAddAlt1Icon />} variant="outlined" disabled={!selectedGroupId} onClick={openInvite}>
-        Add member
+      <Button
+        startIcon={<PersonAddAlt1Icon />}
+        variant="outlined"
+        disabled={!selectedGroupId}
+        onClick={openInvite}
+        aria-label="Add member"
+        sx={{ "& .MuiButton-startIcon": { mr: { xs: 0, sm: 1 } } }}
+      >
+        <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>
+          Add member
+        </Box>
       </Button>
       <Button
         startIcon={<CreditCardIcon />}
         variant="outlined"
         disabled={!selectedGroupId || constitutionLocked}
         onClick={openManualLoan}
+        aria-label="Manual loan"
+        sx={{ "& .MuiButton-startIcon": { mr: { xs: 0, sm: 1 } } }}
       >
-        Manual loan
+        <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>
+          Manual loan
+        </Box>
       </Button>
     </>
   );
@@ -286,7 +307,16 @@ export function AdminLayout({
 
   return (
     <AdminContext.Provider value={ctx}>
-      <AppShell title="Admin Console" user={currentUser} navItems={navItems} header={header} actions={actions} onLogout={onLogout}>
+      <AppShell
+        title="Admin Console"
+        user={currentUser}
+        navItems={navItems}
+        header={header}
+        actions={actions}
+        colorMode={mode}
+        onToggleColorMode={toggle}
+        onLogout={onLogout}
+      >
         {!selectedGroupId ? (
           <Alert severity="info">Create a group to get started.</Alert>
         ) : (
@@ -305,20 +335,20 @@ export function AdminLayout({
               </Alert>
             )}
 
-            <Grid container spacing={2} sx={{ mb: 2 }}>
-              <Grid item xs={12} md={3}>
-                <StatCard label="Members" value={`${members.length}`} icon={<GroupIcon color="action" />} />
+              <Grid container spacing={2} sx={{ mb: 2 }}>
+                <Grid item xs={12} md={3}>
+                  <StatCard label="Members" value={`${members.length}`} icon={<GroupIcon color="action" />} loading={busy} />
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <StatCard label="Total savings" value={currency(totalSavings)} icon={<DashboardIcon color="action" />} loading={busy} />
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <StatCard label="Active loans" value={`${activeLoansCount}`} icon={<CreditCardIcon color="action" />} loading={busy} />
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <StatCard label="Pending requests" value={`${pendingRequestsCount}`} icon={<ChecklistIcon color="action" />} loading={busy} />
+                </Grid>
               </Grid>
-              <Grid item xs={12} md={3}>
-                <StatCard label="Total savings" value={currency(totalSavings)} icon={<DashboardIcon color="action" />} />
-              </Grid>
-              <Grid item xs={12} md={3}>
-                <StatCard label="Active loans" value={`${activeLoansCount}`} icon={<CreditCardIcon color="action" />} />
-              </Grid>
-              <Grid item xs={12} md={3}>
-                <StatCard label="Pending requests" value={`${pendingRequestsCount}`} icon={<ChecklistIcon color="action" />} />
-              </Grid>
-            </Grid>
 
             <Outlet />
           </>
@@ -462,14 +492,14 @@ export function AdminOverviewPage() {
   if (!group) return null;
   return (
     <Box>
-      <Typography variant="h6" gutterBottom>
-        {group.name}
-      </Typography>
-      <Typography variant="body2" color="text.secondary">
-        {constitutionLocked
-          ? `Constitution locked at ${formatDateTime(group.settings.constitution_locked_at)}`
-          : "Constitution is not locked yet. Lock it to enable autonomous lending."}
-      </Typography>
+      <PageHeader
+        title={group.name}
+        subtitle={
+          constitutionLocked
+            ? `Constitution locked at ${formatDateTime(group.settings.constitution_locked_at)}`
+            : "Constitution is not locked yet. Lock it to enable autonomous lending."
+        }
+      />
     </Box>
   );
 }
@@ -486,19 +516,32 @@ export function AdminMembersPage() {
   );
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-        <Typography variant="h6">Members</Typography>
-        <Button variant="contained" startIcon={<PersonAddAlt1Icon />} onClick={openInvite}>
-          Add member
-        </Button>
-      </Box>
+      <PageHeader
+        title="Members"
+        subtitle="Manage membership for this group."
+        action={
+          <Button variant="contained" startIcon={<PersonAddAlt1Icon />} onClick={openInvite}>
+            Add member
+          </Button>
+        }
+      />
       {members.length === 0 && (
         <Alert severity="info" sx={{ mb: 2 }}>
           No members yet. Add your first member to start contributions and enable lending.
         </Alert>
       )}
       <Box height={520}>
-        <DataGrid rows={members} columns={columns} disableRowSelectionOnClick loading={busy} getRowId={(row) => row.id} pageSizeOptions={[10, 25, 50]} initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } } }} />
+        <DataGrid
+          rows={members}
+          columns={columns}
+          disableRowSelectionOnClick
+          loading={busy}
+          getRowId={(row) => row.id}
+          pageSizeOptions={[10, 25, 50]}
+          initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } }, density: "compact" }}
+          slots={{ toolbar: GridToolbar }}
+          slotProps={{ toolbar: { showQuickFilter: true, quickFilterProps: { debounceMs: 250 } } }}
+        />
       </Box>
     </Box>
   );
@@ -534,19 +577,32 @@ export function AdminLoansPage() {
   );
   return (
     <Box>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-        <Typography variant="h6">Loans</Typography>
-        <Button variant="contained" startIcon={<CreditCardIcon />} disabled={constitutionLocked} onClick={openManualLoan}>
-          Manual loan
-        </Button>
-      </Box>
+      <PageHeader
+        title="Loans"
+        subtitle="View active and historical loans."
+        action={
+          <Button variant="contained" startIcon={<CreditCardIcon />} disabled={constitutionLocked} onClick={openManualLoan}>
+            Manual loan
+          </Button>
+        }
+      />
       {constitutionLocked && (
         <Alert severity="info" sx={{ mb: 2 }}>
           Manual loans are disabled because the constitution is locked (autonomous lending).
         </Alert>
       )}
       <Box height={520}>
-        <DataGrid rows={loans} columns={columns} disableRowSelectionOnClick loading={busy} getRowId={(row) => row.id} pageSizeOptions={[10, 25, 50]} initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } } }} />
+        <DataGrid
+          rows={loans}
+          columns={columns}
+          disableRowSelectionOnClick
+          loading={busy}
+          getRowId={(row) => row.id}
+          pageSizeOptions={[10, 25, 50]}
+          initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } }, density: "compact" }}
+          slots={{ toolbar: GridToolbar }}
+          slotProps={{ toolbar: { showQuickFilter: true, quickFilterProps: { debounceMs: 250 } } }}
+        />
       </Box>
     </Box>
   );
@@ -612,14 +668,22 @@ export function AdminRequestsPage() {
   );
   return (
     <Box>
-      <Typography variant="h6" gutterBottom>
-        Requests
-      </Typography>
+      <PageHeader title="Requests" subtitle="Auto-decisions (approve/reject/queue) with transparent reasons." />
       <Alert severity="info" sx={{ mb: 2 }}>
         Requests are auto-approved, rejected, or queued by the constitution. There is no manual approval step.
       </Alert>
       <Box height={520}>
-        <DataGrid rows={requests} columns={columns} disableRowSelectionOnClick loading={busy} getRowId={(row) => row.id} pageSizeOptions={[10, 25, 50]} initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } } }} />
+        <DataGrid
+          rows={requests}
+          columns={columns}
+          disableRowSelectionOnClick
+          loading={busy}
+          getRowId={(row) => row.id}
+          pageSizeOptions={[10, 25, 50]}
+          initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } }, density: "compact" }}
+          slots={{ toolbar: GridToolbar }}
+          slotProps={{ toolbar: { showQuickFilter: true, quickFilterProps: { debounceMs: 250 } } }}
+        />
       </Box>
       <ScorecardDialog open={scorecardOpen} onClose={() => setScorecardOpen(false)} scorecard={scorecard} />
     </Box>
@@ -629,6 +693,7 @@ export function AdminRequestsPage() {
 export function AdminSettingsPage() {
   const { group, busy, constitutionLocked, saveSettings, lockConstitution } = useAdmin();
   const [draft, setDraft] = useState<GroupSettingsUpdatePayload>(() => ({}));
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   useEffect(() => {
     if (!group) return;
@@ -652,14 +717,14 @@ export function AdminSettingsPage() {
 
   return (
     <Box>
-      <Typography variant="h6" gutterBottom>
-        Constitution (cycle rules)
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        {constitutionLocked
-          ? `Locked at ${formatDateTime(group.settings.constitution_locked_at)}. Only corrections via reversals are allowed.`
-          : "Set rules for this cycle, then lock them to enable autonomous lending."}
-      </Typography>
+      <PageHeader
+        title="Constitution (cycle rules)"
+        subtitle={
+          constitutionLocked
+            ? `Locked at ${formatDateTime(group.settings.constitution_locked_at)}. Only corrections via reversals are allowed.`
+            : "Set rules for this cycle, then lock them to enable autonomous lending."
+        }
+      />
 
       <Grid container spacing={2} sx={{ mb: 2 }}>
         <Grid item xs={12} md={6}>
@@ -711,11 +776,7 @@ export function AdminSettingsPage() {
           variant="outlined"
           color="warning"
           disabled={busy || constitutionLocked}
-          onClick={() => {
-            if (window.confirm("Lock constitution for this cycle? This cannot be changed later.")) {
-              void lockConstitution();
-            }
-          }}
+          onClick={() => setConfirmOpen(true)}
         >
           Lock constitution
         </Button>
@@ -723,6 +784,20 @@ export function AdminSettingsPage() {
           Save
         </Button>
       </Box>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        title="Lock constitution?"
+        description="This locks the rules for the cycle. Members can request loans, and decisions become fully automatic. You cannot edit these settings after locking."
+        confirmLabel="Lock"
+        confirmColor="warning"
+        busy={busy}
+        onConfirm={async () => {
+          setConfirmOpen(false);
+          await lockConstitution();
+        }}
+      />
     </Box>
   );
 }

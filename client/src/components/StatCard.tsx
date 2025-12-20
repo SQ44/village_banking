@@ -1,6 +1,16 @@
-import { Box, Card, CardContent, Typography } from "@mui/material";
+import { Box, Card, CardContent, Skeleton, Typography } from "@mui/material";
 
-export function StatCard({ label, value, icon }: { label: string; value: string; icon: React.ReactNode }) {
+export function StatCard({
+  label,
+  value,
+  icon,
+  loading,
+}: {
+  label: string;
+  value: string;
+  icon: React.ReactNode;
+  loading?: boolean;
+}) {
   return (
     <Card variant="outlined">
       <CardContent>
@@ -10,9 +20,8 @@ export function StatCard({ label, value, icon }: { label: string; value: string;
           </Typography>
           {icon}
         </Box>
-        <Typography variant="h6">{value}</Typography>
+        {loading ? <Skeleton height={32} width="60%" /> : <Typography variant="h6">{value}</Typography>}
       </CardContent>
     </Card>
   );
 }
-

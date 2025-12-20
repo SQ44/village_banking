@@ -22,6 +22,8 @@ import {
 } from "@mui/material";
 import MenuIcon from "@mui/icons-material/Menu";
 import LogoutIcon from "@mui/icons-material/Logout";
+import DarkModeIcon from "@mui/icons-material/DarkMode";
+import LightModeIcon from "@mui/icons-material/LightMode";
 
 import type { User } from "../types";
 
@@ -48,6 +50,8 @@ export function AppShell({
   navItems,
   header,
   actions,
+  colorMode,
+  onToggleColorMode,
   onLogout,
   children,
 }: {
@@ -56,6 +60,8 @@ export function AppShell({
   navItems: NavItem[];
   header?: React.ReactNode;
   actions?: React.ReactNode;
+  colorMode?: "light" | "dark";
+  onToggleColorMode?: () => void;
   onLogout: () => void;
   children: React.ReactNode;
 }) {
@@ -178,6 +184,13 @@ export function AppShell({
           </Box>
           <Box display="flex" alignItems="center" gap={1}>
             {actions}
+            {onToggleColorMode ? (
+              <Tooltip title={colorMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}>
+                <IconButton onClick={onToggleColorMode} aria-label="toggle color mode">
+                  {colorMode === "dark" ? <LightModeIcon /> : <DarkModeIcon />}
+                </IconButton>
+              </Tooltip>
+            ) : null}
             <Tooltip title="Account">
               <IconButton onClick={(e) => setAnchor(e.currentTarget)} aria-label="account menu">
                 <Avatar sx={{ width: 34, height: 34, bgcolor: "primary.main" }}>
@@ -220,7 +233,7 @@ export function AppShell({
 
       <Box component="main" sx={{ flexGrow: 1, width: { md: `calc(100% - ${drawerWidth}px)` } }}>
         <Toolbar sx={{ minHeight: { xs: 64, md: 72 } }} />
-        <Box px={{ xs: 2, md: 3 }} py={3}>
+        <Box px={{ xs: 2, md: 3 }} py={{ xs: 2, md: 3 }}>
           {children}
         </Box>
       </Box>
