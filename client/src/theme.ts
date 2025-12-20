@@ -18,5 +18,25 @@ export const theme = createTheme({
     h5: { fontWeight: 700 },
     h6: { fontWeight: 700 },
   },
+  components: {
+    MuiButton: {
+      defaultProps: { disableElevation: true },
+      styleOverrides: {
+        root: { textTransform: "none", fontWeight: 600 },
+      },
+    },
+    MuiCard: {
+      styleOverrides: {
+        root: {
+          border: "1px solid rgba(15, 23, 42, 0.08)",
+          boxShadow: "0 1px 2px rgba(15, 23, 42, 0.06)",
+        },
+      },
+    },
+    MuiDialog: {
+      styleOverrides: {
+        paper: { border: "1px solid rgba(15, 23, 42, 0.08)" },
+      },
+    },
+  },
 });
-
