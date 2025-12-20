@@ -91,9 +91,16 @@ export function AppShell({
                 sx={{
                   borderRadius: 2,
                   mb: 0.5,
+                  transition: "background 160ms ease, border-color 160ms ease, transform 160ms ease",
+                  "&:hover": { transform: "translateY(-1px)" },
                   "&.Mui-selected": {
-                    backgroundColor: "rgba(37, 99, 235, 0.10)",
-                    "&:hover": { backgroundColor: "rgba(37, 99, 235, 0.14)" },
+                    background:
+                      "linear-gradient(90deg, rgba(37,99,235,0.16) 0%, rgba(124,58,237,0.10) 100%)",
+                    border: "1px solid rgba(37,99,235,0.18)",
+                    "&:hover": {
+                      background:
+                        "linear-gradient(90deg, rgba(37,99,235,0.20) 0%, rgba(124,58,237,0.12) 100%)",
+                    },
                   },
                 }}
                 onClick={() => setMobileOpen(false)}
@@ -140,8 +147,27 @@ export function AppShell({
 
   return (
     <Box display="flex" height="100%">
-      <AppBar position="fixed" color="transparent" elevation={0}>
-        <Toolbar sx={{ borderBottom: "1px solid", borderColor: "divider", backdropFilter: "blur(10px)" }}>
+      <AppBar
+        position="fixed"
+        color="transparent"
+        elevation={0}
+        sx={{
+          zIndex: (t) => t.zIndex.drawer + 1,
+          ml: { md: `${drawerWidth}px` },
+          width: { md: `calc(100% - ${drawerWidth}px)` },
+        }}
+      >
+        <Toolbar
+          sx={{
+            minHeight: { xs: 64, md: 72 },
+            py: 1,
+            borderBottom: "1px solid",
+            borderColor: "divider",
+            backdropFilter: "blur(12px)",
+            background:
+              "linear-gradient(90deg, rgba(37,99,235,0.06) 0%, rgba(124,58,237,0.05) 45%, rgba(255,255,255,0.55) 100%)",
+          }}
+        >
           {!isDesktop && (
             <IconButton edge="start" onClick={() => setMobileOpen(true)} aria-label="open navigation">
               <MenuIcon />
@@ -193,7 +219,7 @@ export function AppShell({
       </Box>
 
       <Box component="main" sx={{ flexGrow: 1, width: { md: `calc(100% - ${drawerWidth}px)` } }}>
-        <Toolbar />
+        <Toolbar sx={{ minHeight: { xs: 64, md: 72 } }} />
         <Box px={{ xs: 2, md: 3 }} py={3}>
           {children}
         </Box>
@@ -201,4 +227,3 @@ export function AppShell({
     </Box>
   );
 }
-

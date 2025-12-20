@@ -193,7 +193,17 @@ export function AdminLayout({
   const header = (
     <Box display="flex" alignItems="center" gap={1} width="100%" minWidth={0}>
       <Box minWidth={260} maxWidth={520} flex={1}>
-        <FormControl fullWidth size="small">
+        <FormControl
+          fullWidth
+          size="small"
+          sx={{
+            "& .MuiOutlinedInput-root": {
+              backgroundColor: "background.paper",
+              borderRadius: 2,
+              boxShadow: "0 1px 2px rgba(15,23,42,0.06)",
+            },
+          }}
+        >
           <InputLabel id="group-select-label">Group</InputLabel>
           <Select
             labelId="group-select-label"
