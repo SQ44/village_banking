@@ -68,6 +68,11 @@ export function AppShell({
   const theme = useTheme();
   const location = useLocation();
   const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
+  const isDark = theme.palette.mode === "dark";
+  const topBarText = isDark ? "rgba(226,232,240,0.96)" : "text.primary";
+  const topBarIcon = isDark ? "rgba(226,232,240,0.92)" : "text.primary";
+  const outlinedBorder = isDark ? "rgba(148,163,184,0.6)" : "rgba(37,99,235,0.35)";
+  const outlinedHover = isDark ? "rgba(148,163,184,0.12)" : "rgba(37,99,235,0.06)";
   const [mobileOpen, setMobileOpen] = useState(false);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
 
@@ -170,8 +175,23 @@ export function AppShell({
             borderBottom: "1px solid",
             borderColor: "divider",
             backdropFilter: "blur(12px)",
-            background:
-              "linear-gradient(90deg, rgba(37,99,235,0.06) 0%, rgba(124,58,237,0.05) 45%, rgba(255,255,255,0.55) 100%)",
+            color: topBarText,
+            background: isDark
+              ? "linear-gradient(90deg, rgba(15,23,42,0.96) 0%, rgba(30,41,59,0.88) 55%, rgba(15,23,42,0.96) 100%)"
+              : "linear-gradient(90deg, rgba(37,99,235,0.06) 0%, rgba(124,58,237,0.05) 45%, rgba(255,255,255,0.55) 100%)",
+            "& .MuiIconButton-root": { color: topBarIcon },
+            "& .MuiButton-root": { color: topBarText },
+            "& .MuiButton-contained": {
+              color: "common.white",
+            },
+            "& .MuiButton-outlined": {
+              borderColor: outlinedBorder,
+              color: topBarText,
+            },
+            "& .MuiButton-outlined:hover": {
+              backgroundColor: outlinedHover,
+              borderColor: outlinedBorder,
+            },
           }}
         >
           {!isDesktop && (

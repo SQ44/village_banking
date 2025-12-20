@@ -5,11 +5,13 @@ export function StatCard({
   value,
   icon,
   loading,
+  helper,
 }: {
   label: string;
   value: string;
   icon: React.ReactNode;
   loading?: boolean;
+  helper?: string;
 }) {
   return (
     <Card variant="outlined">
@@ -21,6 +23,11 @@ export function StatCard({
           {icon}
         </Box>
         {loading ? <Skeleton height={32} width="60%" /> : <Typography variant="h6">{value}</Typography>}
+        {helper ? (
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block" }}>
+            {helper}
+          </Typography>
+        ) : null}
       </CardContent>
     </Card>
   );

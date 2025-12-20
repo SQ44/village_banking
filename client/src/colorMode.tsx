@@ -1,13 +1,17 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { ThemeProvider, useMediaQuery } from "@mui/material";
 
-import { createAppTheme, type ColorMode } from "./theme";
+import { createAppTheme } from "./theme";
 
 const STORAGE_KEY = "vb_color_mode";
 
+type ThemeMode = "light" | "dark";
+type ColorPreference = ThemeMode | "system";
+
 type ColorModeContextValue = {
-  mode: ColorMode;
-  setMode: (mode: ColorMode) => void;
+  mode: ThemeMode;
+  preference: ColorPreference;
+  setPreference: (mode: ColorPreference) => void;
   toggle: () => void;
 };
 
@@ -22,24 +26,29 @@ export function useColorMode() {
 export function ColorModeProvider({ children }: { children: React.ReactNode }) {
   const prefersDark = useMediaQuery("(prefers-color-scheme: dark)");
 
-  const [mode, setMode] = useState<ColorMode>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY) as ColorMode | null;
-    if (saved === "light" || saved === "dark") return saved;
-    return prefersDark ? "dark" : "light";
+  const [preference, setPreference] = useState<ColorPreference>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY) as ColorPreference | null;
+    if (saved === "light" || saved === "dark" || saved === "system") return saved;
+    return "system";
   });
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, mode);
-  }, [mode]);
+    localStorage.setItem(STORAGE_KEY, preference);
+  }, [preference]);
 
-  const theme = useMemo(() => createAppTheme(mode), [mode]);
+  const resolvedMode: ThemeMode = preference === "system" ? (prefersDark ? "dark" : "light") : preference;
+  const theme = useMemo(() => createAppTheme(resolvedMode), [resolvedMode]);
   const value = useMemo<ColorModeContextValue>(
     () => ({
-      mode,
-      setMode,
-      toggle: () => setMode((prev) => (prev === "dark" ? "light" : "dark")),
+      mode: resolvedMode,
+      preference,
+      setPreference,
+      toggle: () =>
+        setPreference((prev) =>
+          prev === "dark" || (prev === "system" && prefersDark) ? "light" : "dark"
+        ),
     }),
-    [mode]
+    [prefersDark, preference, resolvedMode]
   );
 
   return (
@@ -48,4 +57,3 @@ export function ColorModeProvider({ children }: { children: React.ReactNode }) {
     </ColorModeContext.Provider>
   );
 }
-

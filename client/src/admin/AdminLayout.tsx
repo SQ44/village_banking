@@ -317,16 +317,40 @@ export function AdminLayout({
 
               <Grid container spacing={2} sx={{ mb: 2 }}>
                 <Grid item xs={12} md={3}>
-                  <StatCard label="Members" value={`${members.length}`} icon={<GroupIcon color="action" />} loading={busy} />
+                  <StatCard
+                    label="Members"
+                    value={`${members.length}`}
+                    icon={<GroupIcon color="action" />}
+                    loading={busy}
+                    helper={members.length < 5 ? "Min 5 recommended" : "Active group"}
+                  />
                 </Grid>
                 <Grid item xs={12} md={3}>
-                  <StatCard label="Total savings" value={currency(totalSavings)} icon={<DashboardIcon color="action" />} loading={busy} />
+                  <StatCard
+                    label="Total savings"
+                    value={currency(totalSavings)}
+                    icon={<DashboardIcon color="action" />}
+                    loading={busy}
+                    helper={totalSavings <= 0 ? "Start collecting to lend" : "Pool ready"}
+                  />
                 </Grid>
                 <Grid item xs={12} md={3}>
-                  <StatCard label="Active loans" value={`${activeLoansCount}`} icon={<CreditCardIcon color="action" />} loading={busy} />
+                  <StatCard
+                    label="Active loans"
+                    value={`${activeLoansCount}`}
+                    icon={<CreditCardIcon color="action" />}
+                    loading={busy}
+                    helper={constitutionLocked ? "Autonomous lending" : "Lock to enable"}
+                  />
                 </Grid>
                 <Grid item xs={12} md={3}>
-                  <StatCard label="Pending requests" value={`${pendingRequestsCount}`} icon={<ChecklistIcon color="action" />} loading={busy} />
+                  <StatCard
+                    label="Pending requests"
+                    value={`${pendingRequestsCount}`}
+                    icon={<ChecklistIcon color="action" />}
+                    loading={busy}
+                    helper={constitutionLocked ? "Auto decisions on" : "Requests open after lock"}
+                  />
                 </Grid>
               </Grid>
 
