@@ -245,8 +245,29 @@ lenco_pay/$RECYCLE.BIN/
 
 # Virtual environment
 server/.venv/
+server/venv/
 server/__pycache__/
 package
 
 # Server logs
 server/*.log
+
+# Node / frontend
+node_modules/
+client/node_modules/
+server/node_modules/
+dist/
+build/
+coverage/
+.next/
+.nuxt/
+.vite/
+.parcel-cache/
+.cache/
+
+# Logs (generic)
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
