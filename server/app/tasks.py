@@ -7,12 +7,18 @@ from sqlmodel import Session, select
 from .config import get_settings
 from .database import engine
 from .interest import apply_interest
-from .models import Account, InterestAccrual, SavingsProduct, Transaction
+from .lipila import service as lipila
+from .models import Account, InterestAccrual, SavingsProduct, Transaction, TransactionStatus
 from .notifications import send_email
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 scheduler = AsyncIOScheduler(timezone=settings.scheduler_timezone)
+
+# A payment younger than this is still plausibly waiting on the member to
+# approve it on their handset, so polling it would only add noise.
+PAYMENT_RECOVERY_MIN_AGE = timedelta(minutes=2)
+PAYMENT_RECOVERY_BATCH = 50
 
 
 def schedule_jobs() -> None:
@@ -20,8 +26,36 @@ def schedule_jobs() -> None:
         return
     scheduler.add_job(run_scheduled_interest, "cron", hour=1, minute=0)
     scheduler.add_job(generate_weekly_statements, "cron", day_of_week="fri", hour=6, minute=0)
+    if settings.lipila_configured:
+        scheduler.add_job(reconcile_pending_payments, "interval", minutes=2)
     scheduler.start()
     logger.info("Background scheduler started with interest + statement jobs")
+
+
+async def reconcile_pending_payments() -> None:
+    """Catch payments whose webhook never arrived.
+
+    Lipila is the authority on whether money moved. A webhook can be lost to a
+    network blip or a restart, so anything left pending past a short grace
+    period is asked about directly rather than sitting unresolved forever.
+    """
+    cutoff = datetime.utcnow() - PAYMENT_RECOVERY_MIN_AGE
+    with Session(engine) as session:
+        stale = session.exec(
+            select(Transaction)
+            .where(Transaction.provider == lipila.PROVIDER_NAME)
+            .where(Transaction.status == TransactionStatus.PENDING)
+            .where(Transaction.created_at <= cutoff)
+            .order_by(Transaction.created_at.asc())
+            .limit(PAYMENT_RECOVERY_BATCH)
+        ).all()
+        for transaction in stale:
+            try:
+                outcome = await lipila.refresh_transaction_status(session, transaction, settings)
+            except Exception:
+                logger.exception("Failed to refresh Lipila transaction %s", transaction.id)
+                continue
+            logger.info("Reconciled transaction %s -> %s", transaction.id, outcome)
 
 
 def run_scheduled_interest() -> None:

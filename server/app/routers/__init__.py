@@ -1,4 +1,4 @@
-from . import accounts, auth_router, dashboard, groups, interest_router, loans, me, products, transactions
+from . import accounts, auth_router, dashboard, groups, interest_router, loans, me, products, transactions, webhooks
 
 __all__ = [
     "accounts",
@@ -10,4 +10,5 @@ __all__ = [
     "me",
     "products",
     "transactions",
+    "webhooks",
 ]

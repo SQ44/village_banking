@@ -37,8 +37,16 @@ def main() -> None:
     with TestClient(app) as client:
         results: list[tuple[str, int]] = []
 
-        def record(label: str, resp) -> None:
+        def record(label: str, resp, expected: set[int] | None = None) -> None:
+            """Record a call. `expected` allows a route whose correct answer is
+            an error — an unconfigured provider, or a refused unsigned webhook."""
             results.append((label, resp.status_code))
+            if expected is not None:
+                if resp.status_code not in expected:
+                    raise AssertionError(
+                        f"{label} returned {resp.status_code}, expected one of {sorted(expected)}: {resp.text}"
+                    )
+                return
             if resp.status_code >= 400:
                 raise AssertionError(f"{label} failed: {resp.status_code} {resp.text}")
 
@@ -173,7 +181,7 @@ def main() -> None:
                 "type": "deposit",
                 "status": "pending",
                 "description": "Pending deposit",
-                "use_lenco": False,
+                "use_lipila": False,
                 "custom_fields": {},
             },
         )
@@ -187,7 +195,8 @@ def main() -> None:
         )
         record("PATCH /transactions/{id}", resp)
 
-        # Lenco collection (simulated when API key is empty)
+        # Lipila mobile money collection. Without lipila_api_key this returns
+        # 503, which is the correct answer and still exercises the route.
         resp = client.post(
             "/transactions/",
             headers=_auth_headers(admin_token),
@@ -195,15 +204,17 @@ def main() -> None:
                 "account_id": account_id,
                 "amount": 10,
                 "type": "deposit",
-                "status": "completed",
-                "description": "Deposit with Lenco",
-                "use_lenco": True,
-                "custom_fields": {"customer_email": "member@example.com", "currency": "NGN"},
+                "description": "Deposit with Lipila",
+                "use_lipila": True,
+                "channel": "mobile_money",
+                "phone_number": "0977123456",
+                "custom_fields": {"customer_email": "member@example.com", "currency": "ZMW"},
             },
         )
-        record("POST /transactions/ (lenco collection)", resp)
+        record("POST /transactions/ (lipila mobile money collection)", resp, expected={201, 503})
 
-        # Lenco transfer (simulated when API key is empty)
+        # Lipila payout. Off until the disbursement paths are confirmed, so a
+        # 503 here is the configured behaviour rather than a failure.
         resp = client.post(
             "/transactions/",
             headers=_auth_headers(admin_token),
@@ -211,18 +222,18 @@ def main() -> None:
                 "account_id": account_id,
                 "amount": 10,
                 "type": "withdrawal",
-                "status": "completed",
-                "description": "Withdrawal with Lenco",
-                "use_lenco": True,
-                "custom_fields": {
-                    "account_number": "0123456789",
-                    "bank_code": "044",
-                    "recipient_name": "Test Member",
-                    "currency": "NGN",
-                },
+                "description": "Withdrawal with Lipila",
+                "use_lipila": True,
+                "channel": "mobile_money",
+                "phone_number": "0977123456",
+                "custom_fields": {"currency": "ZMW"},
             },
         )
-        record("POST /transactions/ (lenco transfer)", resp)
+        record("POST /transactions/ (lipila payout)", resp, expected={201, 503})
+
+        # An unsigned webhook must be refused.
+        resp = client.post("/webhooks/lipila", json={"referenceId": "VB-UNSIGNED", "status": "success"})
+        record("POST /webhooks/lipila (unsigned)", resp, expected={401, 503})
 
         # Interest preview/apply
         start = datetime.utcnow() - timedelta(days=30)

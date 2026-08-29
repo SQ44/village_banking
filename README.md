@@ -2,7 +2,7 @@
 
 
 
-Full-stack toolkit for running a customizable village banking / rotating savings program with automated settlements through Lenco Pay. The FastAPI backend keeps a ledger of members, savings products, transactions, and interest accruals while the React dashboard offers an operator-friendly workspace.
+Full-stack toolkit for running a customizable village banking / rotating savings program with automated settlements through Lipila. The FastAPI backend keeps a ledger of members, savings products, transactions, and interest accruals while the React dashboard offers an operator-friendly workspace.
 
 
 
@@ -10,7 +10,7 @@ Full-stack toolkit for running a customizable village banking / rotating savings
 
 - **Ledger & Members** – Capture members, attach configurable savings products, and maintain running balances per account.
 
-- **Transaction Tracking** – Support deposits, withdrawals, loans, repayments, and manual adjustments. Transactions can be settled through Lenco Pay with one click.
+- **Transaction Tracking** – Support deposits, withdrawals, loans, repayments, and manual adjustments. Transactions can be collected or paid out through Lipila with one click.
 
 - **Interest Engine** – Preview or apply interest earnings per member with custom date ranges and compounding rules inherited from their product.
 
@@ -24,11 +24,11 @@ Full-stack toolkit for running a customizable village banking / rotating savings
 
 ## Tech Stack
 
-- Backend: FastAPI + SQLModel (SQLite default) with async HTTP client for Lenco Pay.
+- Backend: FastAPI + SQLModel (SQLite default) with an async HTTP client for Lipila.
 
 - Frontend: React + Vite + TypeScript.
 
-- Integration: Lenco Pay client wrapper with webhook verification helper.
+- Integration: Lipila collections and payouts, with HMAC webhook verification and a reconciliation poller.
 
 
 
@@ -60,13 +60,17 @@ Key environment variables (see `server/.env.example`):
 
 - `database_url` – connection string, default SQLite file `villagebank.db`.
 
-- `lenco_pay_base` – base URL for the local `lenco_pay` gateway (e.g. `http://localhost:8001/api/v1`); when set, settlement calls are proxied through it.
+- `lipila_api_key` – Lipila API key. Leave empty and every Lipila route answers `503`; nothing is simulated, so a balance is never moved on a payment that did not happen.
 
-- `lenco_api_base` – base URL for Lenco Pay.
+- `lipila_base_url` / `lipila_live_enabled` – sandbox (`https://api.lipila.dev`) or live (`https://blz.lipila.io`). These two must agree or the app refuses to start, so a live key can never be pointed at the sandbox by accident.
 
-- `lenco_api_key` – secret for live calls; leave empty to work in simulation mode.
+- `lipila_webhook_secret_current` / `lipila_webhook_secret_previous` – Base64 of exactly 32 bytes. Both are accepted during a rotation so events signed just before the swap still verify.
 
-- `lenco_webhook_secret` – used to verify Lenco callbacks.
+- `lipila_callback_base_url` – public origin Lipila must reach to deliver webhooks to `POST /webhooks/lipila`.
+
+- `lipila_card_return_url` – where a card payer lands after Lipila's hosted page.
+
+- `lipila_disbursements_enabled` and the `lipila_disbursement_*_path` settings – payouts, off by default. See the caveat under Lipila Flows.
 
 - `interest_compound_days` – default compounding period in days.
 
@@ -111,15 +115,23 @@ The dashboard talks directly to the FastAPI service. Ensure `VITE_API_URL` point
 
 - **Savings Products** (`POST /products`) let you set interest rates, compounding cadence, minimum balances, and any auxiliary fields (e.g., meeting days). Attach a product when creating an account via the UI or API.
 
-- **Custom Fields JSON** is available on accounts and transactions. Use it to store `customer_email` / `customer_phone` (collections) and `account_number` / `bank_code` (transfers).
+- **Custom Fields JSON** is available on accounts and transactions. Use it to store `customer_email` (collections) and `account_number` / `bank_code` / `recipient_name` (bank payouts).
 
-- **Lenco Pay Flows** – Toggle "Trigger Lenco Pay" in the transaction form, or send `use_lenco=true` in the API payload. Deposits/repayments initiate a payment (provide `customer_email` or `customer_phone`), while withdrawals/loan disbursements initiate a transfer (provide `account_number`; if `lenco_pay_base` is set also provide `bank_code`, with optional `recipient_name`). Without API keys, the system records simulated responses for testing.
+- **Lipila Flows** – Toggle "Pay with Lipila" in the transaction form, or send `use_lipila=true` with a `channel` in the API payload.
+
+  **Collections** (`deposit`, `loan_repayment`) go out over `mobile_money` or `card` and are written **pending**: the balance does not move until Lipila confirms the payment, whatever `status` the request asked for. A card collection returns `card_redirect_url` — send the payer there to authorise. Confirmation arrives by webhook, or by the reconciliation poller if that webhook is lost.
+
+  **Payouts** (`withdrawal`, `loan_disbursement`) go out over `mobile_money` or `bank` and work the other way round: the funds are debited when the payout is requested, so the same balance cannot be withdrawn twice while one payout is in flight. A payout Lipila reports as failed hands the money straight back.
+
+  > **Payouts are unverified.** The collection calls are ported from an integration that ran against Lipila in production. The disbursement calls are not — no payout request has ever been sent, and the endpoint paths are inferred from the collections API's own convention. They stay behind `lipila_disbursements_enabled=false` until you confirm them against the Lipila dashboard docs. Every path is a setting, so a correction is an `.env` change rather than a code change.
+
+  Both directions refuse a payload whose amount or currency disagrees with the ledger, and mark it `needs_review` instead of settling it.
 
 - **Interest Workflow** – The interest panel previews earnings over arbitrary date ranges and, on apply, posts an `interest` transaction plus an `InterestAccrual` entry.
 
 - **Extending the API** – Each router is isolated under `server/app/routers`. Add new modules (e.g., reporting, group payouts) and include them inside `app/main.py`.
 
-- **Lenco Core API** – The `lenco_pay` folder contains the lower-level API, rate-limiting, anti-fraud, and webhook retry logic you've already invested in. Point this dashboard at that service to reuse all the battle-tested plumbing.
+- **Payment states** – The ledger records `pending`/`completed`/`failed`, but Lipila says more than that. Its own word is kept on `provider_status` (`pending`, `succeeded`, `failed`, `expired`, `reversed`, `refunded`, `needs_review`) so an operator can tell an expiry from a refusal. `needs_review` deliberately holds at `pending`: an ambiguous provider answer is not evidence that money moved, nor that it did not.
 
 
 
@@ -161,7 +173,6 @@ Before first run, create your local env files:
 
 ```bash
 cp server/.env.example server/.env
-cp lenco_pay/.env.example lenco_pay/.env
 ```
 
 Set at least `default_admin_email`, `default_admin_password`, and `auth_secret_key` in `server/.env`.
@@ -176,7 +187,7 @@ powershell -ExecutionPolicy Bypass -File server\\scripts\\bootstrap_env.ps1
 
 ## Next Steps
 
-- Plug in production Lenco credentials plus webhook endpoint for state reconciliation.
+- Confirm the Lipila payout endpoints, then enable `lipila_disbursements_enabled`.
 
 - Expand background jobs to push statements/SMS via your preferred provider.
 

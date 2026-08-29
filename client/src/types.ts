@@ -58,6 +58,8 @@ export interface AccountPayload {
   custom_fields?: Record<string, any>;
 }
 
+export type PaymentChannel = "mobile_money" | "card" | "bank";
+
 export interface Transaction {
   id: number;
   account_id: number;
@@ -67,6 +69,13 @@ export interface Transaction {
   description?: string;
   custom_fields: Record<string, any>;
   created_at: string;
+  provider?: string | null;
+  provider_reference?: string | null;
+  provider_channel?: PaymentChannel | null;
+  /** Lipila's own status: pending, succeeded, failed, expired, needs_review… */
+  provider_status?: string | null;
+  /** Only on a card collection — send the payer here to authorise. */
+  card_redirect_url?: string | null;
 }
 
 export interface TransactionPayload {
@@ -76,7 +85,9 @@ export interface TransactionPayload {
   description?: string;
   status?: TransactionStatus;
   custom_fields?: Record<string, any>;
-  use_lenco?: boolean;
+  use_lipila?: boolean;
+  channel?: PaymentChannel;
+  phone_number?: string;
 }
 
 export interface DashboardStats {

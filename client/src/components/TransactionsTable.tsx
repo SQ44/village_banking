@@ -49,7 +49,14 @@ export function TransactionsTable({ transactions }: Props) {
                 </td>
                 <td>
                   {tx.description}
-                  {tx.custom_fields?.lenco_response && <small>Lenco synced</small>}
+                  {tx.provider === "lipila" && (
+                    <small>
+                      Lipila
+                      {tx.provider_status && tx.provider_status !== "succeeded"
+                        ? ` · ${tx.provider_status.replace(/_/g, " ")}`
+                        : " · confirmed"}
+                    </small>
+                  )}
                 </td>
               </tr>
             ))}

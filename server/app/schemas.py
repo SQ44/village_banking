@@ -11,6 +11,7 @@ from .models import (
     LoanStatus,
     LoanRequestStatus,
     MembershipRole,
+    PaymentChannel,
     RepaymentFrequency,
     TransactionStatus,
     TransactionType,
@@ -102,13 +103,23 @@ class TransactionBase(MetadataMixin):
 
 class TransactionCreate(TransactionBase):
     status: TransactionStatus = TransactionStatus.PENDING
-    use_lenco: bool = False
+    # Route this transaction through Lipila. A collection is then held pending
+    # until Lipila confirms it, whatever `status` asked for.
+    use_lipila: bool = False
+    channel: PaymentChannel = PaymentChannel.MOBILE_MONEY
+    phone_number: Optional[str] = None
 
 
 class TransactionRead(TransactionBase):
     id: int
     status: TransactionStatus
     created_at: datetime
+    provider: Optional[str] = None
+    provider_reference: Optional[str] = None
+    provider_channel: Optional[PaymentChannel] = None
+    provider_status: Optional[str] = None
+    # Present only for a card collection: where to send the payer to authorise.
+    card_redirect_url: Optional[str] = None
 
 
 class TransactionStatusUpdate(SQLModel):

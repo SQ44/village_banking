@@ -61,6 +61,28 @@ def _migrate_sqlite() -> None:
             if "constitution_locked_at" not in cols:
                 conn.execute(text("ALTER TABLE groupsettings ADD COLUMN constitution_locked_at DATETIME"))
 
+        # Lipila payment linkage on existing ledgers.
+        if _sqlite_table_exists(conn, "transaction"):
+            cols = _sqlite_columns(conn, "transaction")
+            for column, ddl in (
+                ("provider", "VARCHAR"),
+                ("provider_reference", "VARCHAR"),
+                ("provider_channel", "VARCHAR"),
+                ("provider_status", "VARCHAR"),
+                ("provider_identifier", "VARCHAR"),
+                ("last_provider_sync_at", "DATETIME"),
+            ):
+                if column not in cols:
+                    conn.execute(text(f'ALTER TABLE "transaction" ADD COLUMN {column} {ddl}'))
+            # SQLite cannot add a UNIQUE column in place, so the constraint the
+            # model declares is created separately for pre-existing databases.
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_transaction_provider_reference "
+                    'ON "transaction" (provider_reference)'
+                )
+            )
+
 
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)

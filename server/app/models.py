@@ -135,6 +135,12 @@ class Account(SQLModel, table=True):
 
 
 
+class PaymentChannel(str, Enum):
+    MOBILE_MONEY = "mobile_money"
+    CARD = "card"
+    BANK = "bank"
+
+
 class Transaction(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     account_id: int = Field(foreign_key="account.id")
@@ -145,7 +151,31 @@ class Transaction(SQLModel, table=True):
     custom_fields: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+    # Payment provider linkage. `provider_reference` is what Lipila echoes back
+    # on a webhook, so it is how an inbound event finds its transaction.
+    provider: Optional[str] = Field(default=None, index=True)
+    provider_reference: Optional[str] = Field(default=None, index=True, unique=True)
+    provider_channel: Optional[PaymentChannel] = Field(default=None)
+    # Lipila's own vocabulary, kept alongside the coarser ledger status.
+    provider_status: Optional[str] = Field(default=None)
+    provider_identifier: Optional[str] = Field(default=None)
+    last_provider_sync_at: Optional[datetime] = Field(default=None)
+
     account: "Account" = Relationship(back_populates="transactions")
+
+
+class ProviderEvent(SQLModel, table=True):
+    """One received webhook, recorded so a redelivery cannot be applied twice."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    provider: str = Field(default="lipila", index=True)
+    webhook_id: str = Field(index=True, unique=True)
+    webhook_timestamp: Optional[datetime] = Field(default=None)
+    provider_reference: Optional[str] = Field(default=None, index=True)
+    processing_status: str = Field(default="received")
+    payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    processed_at: Optional[datetime] = Field(default=None)
 
 
 class LoanStatus(str, Enum):

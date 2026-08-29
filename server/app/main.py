@@ -4,14 +4,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .database import init_db
 from .auth import ensure_default_admin
-from .routers import accounts, auth_router, dashboard, groups, interest_router, loans, me, products, transactions
+from .routers import (
+    accounts,
+    auth_router,
+    dashboard,
+    groups,
+    interest_router,
+    loans,
+    me,
+    products,
+    transactions,
+    webhooks,
+)
 from .tasks import schedule_jobs
 
 settings = get_settings()
 
 app = FastAPI(
     title="Village Banking Platform",
-    description="Community banking ledger with Lenco Pay integration",
+    description="Community banking ledger with Lipila payments",
     version="0.1.0",
 )
 
@@ -45,3 +56,4 @@ app.include_router(auth_router.router)
 app.include_router(groups.router)
 app.include_router(loans.router)
 app.include_router(me.router)
+app.include_router(webhooks.router)

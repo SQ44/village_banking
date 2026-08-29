@@ -100,7 +100,6 @@ lenco_pay/celerybeat.pid
 lenco_pay/*.sage.py
 
 # Environments
-lenco_pay/.env
 lenco_pay/.venv
 lenco_pay/env/
 lenco_pay/venv/
@@ -154,8 +153,6 @@ lenco_pay/*.log
 lenco_pay/logs/
 
 # Local development
-lenco_pay/.env.local
-lenco_pay/.env.*.local
 
 
 # Test artifacts
@@ -205,7 +202,6 @@ lenco_pay/__pypackages__/
 lenco_pay/celerybeat-schedule
 lenco_pay/celerybeat.pid
 lenco_pay/*.sage.py
-lenco_pay/.env
 lenco_pay/.venv
 lenco_pay/env/
 lenco_pay/venv/
@@ -232,8 +228,6 @@ lenco_pay/*.sqlite3
 lenco_pay/test_lenco_pay.db
 lenco_pay/lenco_pay.db
 lenco_pay/logs/
-lenco_pay/.env.local
-lenco_pay/.env.*.local
 lenco_pay/.AppleDouble
 lenco_pay/.LSOverride
 lenco_pay/Thumbs.db

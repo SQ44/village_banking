@@ -1,17 +1,4 @@
 services:
-  lenco_pay:
-    build:
-      context: ./lenco_pay
-    ports:
-      - "8001:8000"
-    env_file:
-      - ./lenco_pay/.env.example
-      - ./lenco_pay/.env
-    environment:
-      database_url: sqlite:////data/lenco_pay.db
-    volumes:
-      - lenco-data:/data
-
   api:
     build:
       context: ./server
@@ -22,11 +9,8 @@ services:
       - ./server/.env
     environment:
       database_url: sqlite:////data/villagebank.db
-      lenco_pay_base: http://lenco_pay:8000/api/v1
     volumes:
       - api-data:/data
-    depends_on:
-      - lenco_pay
 
   web:
     build:
@@ -38,4 +22,3 @@ services:
 
 volumes:
   api-data:
-  lenco-data:

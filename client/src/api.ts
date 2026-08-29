@@ -93,6 +93,10 @@ export const Api = {
   },
   createTransaction: (payload: TransactionPayload) =>
     request<Transaction>("/transactions", { method: "POST", body: JSON.stringify(payload) }),
+  /** Re-read a Lipila payment from the provider — used after a card return, or
+   *  while a member is approving a mobile money prompt on their handset. */
+  refreshTransaction: (transactionId: number) =>
+    request<Transaction>(`/transactions/${transactionId}/refresh`, { method: "POST" }),
   getProducts: () => request<SavingsProduct[]>("/products"),
   createProduct: (payload: Omit<SavingsProduct, "id">) =>
     request<SavingsProduct>("/products", { method: "POST", body: JSON.stringify(payload) }),
