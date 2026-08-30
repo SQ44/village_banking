@@ -292,6 +292,13 @@ def apply_provider_status(
     ledger_status = to_ledger_status(provider_status)
     try:
         apply_status_change(account, transaction, ledger_status)
+        # An initial contribution is owed until it actually arrives, so the
+        # marker is cleared here rather than when the collection was requested.
+        if ledger_status == TransactionStatus.COMPLETED and transaction.type == TransactionType.DEPOSIT:
+            if (account.custom_fields or {}).get("initial_contribution_due") is not None:
+                remaining = dict(account.custom_fields)
+                remaining.pop("initial_contribution_due", None)
+                account.custom_fields = remaining
     except InsufficientFunds:
         transaction.provider_status = "needs_review"
         transaction.status = TransactionStatus.PENDING

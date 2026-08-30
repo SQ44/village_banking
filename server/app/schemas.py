@@ -202,8 +202,42 @@ class MemberInvite(SQLModel):
     full_name: Optional[str] = None
     password: str
     name: str
+    # The member's mobile money number. Kept on the account so any later
+    # collection can default to it instead of asking again.
+    phone_number: Optional[str] = None
     min_initial_deposit: float = 0
+    # Ask Lipila for the initial contribution as the member is added. When false
+    # the amount is recorded as owed and collected whenever they are ready.
+    collect_initial_contribution: bool = False
     custom_fields: Dict[str, Any] = PydanticField(default_factory=dict)
+
+
+class MemberPayment(SQLModel):
+    """The collection started for a member, if one was."""
+
+    transaction_id: int
+    amount: float
+    status: TransactionStatus
+    provider_status: Optional[str] = None
+    provider_reference: Optional[str] = None
+    card_redirect_url: Optional[str] = None
+
+
+class MemberInviteResponse(SQLModel):
+    membership: "MembershipRead"
+    # Present when a collection was started. The member approves it on their
+    # handset; the balance moves only once Lipila confirms.
+    payment: Optional[MemberPayment] = None
+    # Set when an initial contribution is owed but not yet requested.
+    initial_contribution_due: Optional[float] = None
+
+
+class MemberContributionRequest(SQLModel):
+    """Collect a contribution from a member who is ready to pay."""
+
+    amount: Optional[float] = None
+    phone_number: Optional[str] = None
+    channel: PaymentChannel = PaymentChannel.MOBILE_MONEY
 
 
 class MembershipRead(SQLModel):

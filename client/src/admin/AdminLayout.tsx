@@ -11,11 +11,15 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
+  FormControlLabel,
   Grid,
   InputLabel,
   MenuItem,
   Select,
+  Snackbar,
+  Switch,
   TextField,
+  Typography,
 } from "@mui/material";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import GroupIcon from "@mui/icons-material/Group";
@@ -74,6 +78,11 @@ export function AdminLayout({
   const [requests, setRequests] = useState<LoanRequest[]>([]);
   const [busy, setBusy] = useState(false);
 
+  // Confirmation for actions whose result is not visible on screen — a payment
+  // prompt sent to a member's handset, for instance.
+  const [notice, setNotice] = useState<string | null>(null);
+  const onNotice = (msg: string) => setNotice(msg);
+
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
 
@@ -83,7 +92,9 @@ export function AdminLayout({
     full_name: "",
     password: "",
     name: "",
+    phone_number: "",
     min_initial_deposit: 0,
+    collect_initial_contribution: false,
     custom_fields: {},
   });
 
@@ -233,18 +244,6 @@ export function AdminLayout({
           Add member
         </Box>
       </Button>
-      <Button
-        startIcon={<CreditCardIcon />}
-        variant="outlined"
-        disabled={!selectedGroupId || constitutionLocked}
-        onClick={openManualLoan}
-        aria-label="Manual loan"
-        sx={{ "& .MuiButton-startIcon": { mr: { xs: 0, sm: 1 } } }}
-      >
-        <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>
-          Manual loan
-        </Box>
-      </Button>
     </>
   );
 
@@ -255,8 +254,17 @@ export function AdminLayout({
       { to: "/admin/loans", label: "Loans", icon: <CreditCardIcon />, badge: activeLoansCount },
       { to: "/admin/requests", label: "Requests", icon: <ChecklistIcon />, badge: pendingRequestsCount },
       { to: "/admin/settings", label: "Constitution", icon: <GavelIcon />, badge: constitutionLocked ? "" : "!" },
+      // An action, not a destination. Only available while the constitution is
+      // open — once it is locked, lending is autonomous and a hand-written loan
+      // would sidestep the rules the group just agreed to.
+      {
+        label: "Manual loan",
+        icon: <CreditCardIcon />,
+        onClick: openManualLoan,
+        disabled: !selectedGroupId || constitutionLocked,
+      },
     ],
-    [activeLoansCount, constitutionLocked, members.length, pendingRequestsCount]
+    [activeLoansCount, constitutionLocked, members.length, pendingRequestsCount, selectedGroupId]
   );
 
   useEffect(() => {
@@ -358,6 +366,17 @@ export function AdminLayout({
           </>
         )}
 
+        <Snackbar
+          open={Boolean(notice)}
+          autoHideDuration={8000}
+          onClose={() => setNotice(null)}
+          anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        >
+          <Alert severity="info" onClose={() => setNotice(null)} sx={{ width: "100%" }}>
+            {notice}
+          </Alert>
+        </Snackbar>
+
         <Dialog open={createGroupOpen} onClose={() => setCreateGroupOpen(false)} fullWidth maxWidth="sm">
           <DialogTitle>Create group</DialogTitle>
           <DialogContent>
@@ -391,21 +410,54 @@ export function AdminLayout({
         <Dialog open={inviteOpen} onClose={() => setInviteOpen(false)} fullWidth maxWidth="sm">
           <DialogTitle>Add member</DialogTitle>
           <DialogContent>
+            {/* These fields describe someone else, not whoever is signed in. Left
+                unmarked, the browser reads an email beside a password as a login
+                form and fills the admin's own saved credentials — which would
+                hand a new member the admin's password. `new-password` breaks the
+                username/password pairing the password manager looks for. */}
             <Grid container spacing={2} sx={{ mt: 1 }}>
               <Grid item xs={12} md={6}>
-                <TextField label="Member name" fullWidth value={invite.name} onChange={(e) => setInvite((p) => ({ ...p, name: e.target.value }))} />
+                <TextField label="Member name" fullWidth name="member-name" autoComplete="off" value={invite.name} onChange={(e) => setInvite((p) => ({ ...p, name: e.target.value }))} />
               </Grid>
               <Grid item xs={12} md={6}>
-                <TextField label="Email" fullWidth value={invite.email} onChange={(e) => setInvite((p) => ({ ...p, email: e.target.value }))} />
+                <TextField label="Email" fullWidth name="member-email" autoComplete="off" value={invite.email} onChange={(e) => setInvite((p) => ({ ...p, email: e.target.value }))} />
               </Grid>
               <Grid item xs={12} md={6}>
-                <TextField label="Full name (optional)" fullWidth value={invite.full_name ?? ""} onChange={(e) => setInvite((p) => ({ ...p, full_name: e.target.value }))} />
+                <TextField label="Full name (optional)" fullWidth name="member-full-name" autoComplete="off" value={invite.full_name ?? ""} onChange={(e) => setInvite((p) => ({ ...p, full_name: e.target.value }))} />
               </Grid>
               <Grid item xs={12} md={6}>
-                <TextField label="Temporary password" fullWidth type="password" value={invite.password} onChange={(e) => setInvite((p) => ({ ...p, password: e.target.value }))} />
+                <TextField label="Temporary password" fullWidth type="password" name="member-temp-password" autoComplete="new-password" value={invite.password} onChange={(e) => setInvite((p) => ({ ...p, password: e.target.value }))} />
               </Grid>
               <Grid item xs={12} md={6}>
-                <TextField label="Initial contribution" fullWidth type="number" value={invite.min_initial_deposit ?? 0} onChange={(e) => setInvite((p) => ({ ...p, min_initial_deposit: Number(e.target.value) }))} />
+                <TextField
+                  label="Mobile number"
+                  fullWidth
+                  name="member-phone"
+                  autoComplete="off"
+                  placeholder="0977123456"
+                  value={invite.phone_number ?? ""}
+                  onChange={(e) => setInvite((p) => ({ ...p, phone_number: e.target.value }))}
+                  helperText="Airtel, MTN or Zamtel. Used to collect contributions."
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField label="Initial contribution" fullWidth type="number" name="member-initial" autoComplete="off" value={invite.min_initial_deposit ?? 0} onChange={(e) => setInvite((p) => ({ ...p, min_initial_deposit: Number(e.target.value) }))} />
+              </Grid>
+              <Grid item xs={12}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={invite.collect_initial_contribution ?? false}
+                      onChange={(e) => setInvite((p) => ({ ...p, collect_initial_contribution: e.target.checked }))}
+                    />
+                  }
+                  label="Request the contribution now"
+                />
+                <Typography variant="caption" color="text.secondary" display="block">
+                  {invite.collect_initial_contribution
+                    ? "The member gets a prompt on their phone. Their savings update only once they approve it."
+                    : "The amount is recorded as owed. Collect it from the members list whenever they are ready."}
+                </Typography>
               </Grid>
             </Grid>
           </DialogContent>
@@ -413,13 +465,30 @@ export function AdminLayout({
             <Button onClick={() => setInviteOpen(false)}>Cancel</Button>
             <Button
               variant="contained"
-              disabled={busy || !selectedGroupId || !invite.name.trim() || !invite.email.trim() || !invite.password}
+              disabled={
+                busy ||
+                !selectedGroupId ||
+                !invite.name.trim() ||
+                !invite.email.trim() ||
+                !invite.password ||
+                (invite.collect_initial_contribution &&
+                  (!invite.phone_number?.trim() || !(invite.min_initial_deposit && invite.min_initial_deposit > 0)))
+              }
               onClick={async () => {
                 try {
-                  await Api.addGroupMember(Number(selectedGroupId), invite);
+                  const result = await Api.addGroupMember(Number(selectedGroupId), invite);
                   setInviteOpen(false);
-                  setInvite({ email: "", full_name: "", password: "", name: "", min_initial_deposit: 0, custom_fields: {} });
+                  setInvite({ email: "", full_name: "", password: "", name: "", phone_number: "", min_initial_deposit: 0, collect_initial_contribution: false, custom_fields: {} });
                   await refresh(Number(selectedGroupId));
+                  if (result.payment) {
+                    onNotice(
+                      `Member added. A prompt for ${currency(result.payment.amount)} was sent to their phone — their savings update once they approve it.`,
+                    );
+                  } else if (result.initial_contribution_due) {
+                    onNotice(
+                      `Member added. ${currency(result.initial_contribution_due)} is recorded as owed — collect it from the members list when they are ready.`,
+                    );
+                  }
                 } catch (err) {
                   onError(err instanceof Error ? err.message : "Failed to add member");
                 }

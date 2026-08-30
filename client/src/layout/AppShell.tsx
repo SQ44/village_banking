@@ -28,11 +28,14 @@ import LightModeIcon from "@mui/icons-material/LightMode";
 import type { User } from "../types";
 
 export type NavItem = {
-  to: string;
+  /** Route to navigate to. Omitted for an item that runs an action instead. */
+  to?: string;
   label: string;
   icon: React.ReactNode;
   badge?: number | string;
   disabled?: boolean;
+  /** Runs instead of navigating — for actions that live beside the routes. */
+  onClick?: () => void;
 };
 
 const drawerWidth = 280;
@@ -93,11 +96,13 @@ export function AppShell({
       <Box flex={1} overflow="auto" py={1}>
         <List sx={{ px: 1 }}>
           {navItems.map((item) => {
+            // An action item is a plain button: it has nowhere to navigate to,
+            // and must never render as a link or claim the selected state.
+            const isAction = !item.to;
             const content = (
               <ListItemButton
-                component={NavLink as any}
-                to={item.to}
-                selected={selectedPrefix === item.to}
+                {...(isAction ? {} : { component: NavLink as any, to: item.to })}
+                selected={!isAction && selectedPrefix === item.to}
                 disabled={item.disabled}
                 sx={{
                   borderRadius: 2,
@@ -114,7 +119,10 @@ export function AppShell({
                     },
                   },
                 }}
-                onClick={() => setMobileOpen(false)}
+                onClick={() => {
+                  setMobileOpen(false);
+                  item.onClick?.();
+                }}
               >
                 <ListItemIcon sx={{ minWidth: 40 }}>{item.icon}</ListItemIcon>
                 <ListItemText
@@ -133,7 +141,7 @@ export function AppShell({
                 />
               </ListItemButton>
             );
-            return <Box key={item.to}>{content}</Box>;
+            return <Box key={item.to ?? item.label}>{content}</Box>;
           })}
         </List>
       </Box>

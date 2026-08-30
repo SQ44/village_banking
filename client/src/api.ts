@@ -18,7 +18,10 @@ import type {
   LoanRequestCreatePayload,
   LoanRequestDecisionPayload,
   LoanBoardItem,
+  MemberContributionPayload,
   MemberInvitePayload,
+  MemberInviteResponse,
+  MemberPayment,
   MemberForecast,
   MemberSummary,
   Membership,
@@ -116,7 +119,13 @@ export const Api = {
     request<GroupSettings>(`/groups/${groupId}/constitution/lock`, { method: "POST" }),
   getGroupMembers: (groupId: number) => request<Membership[]>(`/groups/${groupId}/members`),
   addGroupMember: (groupId: number, payload: MemberInvitePayload) =>
-    request<Membership>(`/groups/${groupId}/members`, { method: "POST", body: JSON.stringify(payload) }),
+    request<MemberInviteResponse>(`/groups/${groupId}/members`, { method: "POST", body: JSON.stringify(payload) }),
+  /** Collect from a member who deferred their contribution at sign-up. */
+  collectMemberContribution: (groupId: number, accountId: number, payload: MemberContributionPayload) =>
+    request<MemberPayment>(`/groups/${groupId}/members/${accountId}/collect`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   acceptGroupTerms: (groupId: number) =>
     request<Membership>(`/groups/${groupId}/accept-terms`, { method: "POST", body: JSON.stringify({ accepted: true }) }),
   getGroupAccounts: (groupId: number) => request<Account[]>(`/groups/${groupId}/accounts`),

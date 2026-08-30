@@ -70,7 +70,7 @@ def main() -> None:
             },
         )
         resp.raise_for_status()
-        member_a_account = resp.json()["account_id"]
+        member_a_account = resp.json()["membership"]["account_id"]
 
         resp = client.post(
             f"/groups/{group_id}/members",
@@ -85,7 +85,25 @@ def main() -> None:
             },
         )
         resp.raise_for_status()
-        member_b_account = resp.json()["account_id"]
+        member_b_account = resp.json()["membership"]["account_id"]
+
+        # Fund the pool. An initial contribution is recorded as owed, not banked,
+        # so the deposits the lending logic needs are posted outright here.
+        for account_id, amount in ((member_a_account, 1000), (member_b_account, 3000)):
+            resp = client.post(
+                "/transactions",
+                headers=_auth_headers(admin_token),
+                json={
+                    "account_id": account_id,
+                    "amount": amount,
+                    "type": "deposit",
+                    "status": "completed",
+                    "description": "Opening contribution",
+                    "use_lipila": False,
+                    "custom_fields": {},
+                },
+            )
+            resp.raise_for_status()
 
         # Members login + accept terms
         resp = client.post("/auth/login", data={"username": "a@example.com", "password": "MemberA@123"})

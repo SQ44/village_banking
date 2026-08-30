@@ -5,9 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from ..auth import create_user, get_current_active_user
+from ..config import get_settings
 from ..database import get_session
 from ..group_finance import net_contributions_by_account
-from ..models import Account, Group, GroupSettings, Membership, MembershipRole, Transaction, TransactionStatus, TransactionType, User
+from ..lipila import service as lipila
+from ..models import Account, Group, GroupSettings, Membership, MembershipRole, PaymentChannel, Transaction, TransactionStatus, TransactionType, User
 from ..schemas import (
     AcceptTermsRequest,
     AccountRead,
@@ -17,7 +19,10 @@ from ..schemas import (
     GroupSettingsRead,
     GroupSettingsUpdate,
     GroupWithSettings,
+    MemberContributionRequest,
     MemberInvite,
+    MemberInviteResponse,
+    MemberPayment,
     MembershipRead,
     UserCreate,
 )
@@ -184,13 +189,87 @@ def list_group_accounts(
     return session.exec(statement).all()
 
 
-@router.post("/{group_id}/members", response_model=MembershipRead, status_code=201)
-def add_group_member(
+async def _start_contribution_collection(
+    session: Session,
+    account: Account,
+    *,
+    amount: float,
+    phone_number: str | None,
+    channel: PaymentChannel,
+    description: str,
+) -> MemberPayment:
+    """Ask Lipila to collect a contribution from a member.
+
+    The deposit is written pending and the balance left alone. It moves only
+    when the member approves the prompt on their handset and Lipila confirms —
+    the same rule every other collection follows.
+    """
+    settings = get_settings()
+    if not settings.lipila_configured:
+        raise HTTPException(status_code=503, detail="Lipila is not configured")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Contribution amount must be greater than zero")
+
+    raw_phone = phone_number or (account.custom_fields or {}).get("phone")
+    try:
+        account_number = lipila.normalize_phone_for_channel(channel, raw_phone)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    transaction = Transaction(
+        account_id=account.id,
+        amount=amount,
+        type=TransactionType.DEPOSIT,
+        status=TransactionStatus.PENDING,
+        description=description,
+        custom_fields={"months_covered": 1, "currency": "ZMW"},
+        created_at=datetime.utcnow(),
+        provider=lipila.PROVIDER_NAME,
+        provider_reference=lipila.new_reference(),
+        provider_channel=channel,
+        provider_status="created",
+    )
+    session.add(transaction)
+    session.commit()
+    session.refresh(transaction)
+
+    reference_data = f"Account {account.id}" + (f" / Group {account.group_id}" if account.group_id else "")
+    try:
+        provider_status, provider_payload = await lipila.start_collection(
+            settings=settings,
+            transaction=transaction,
+            account=account,
+            channel=channel,
+            account_number=account_number,
+            email=account.email,
+            currency="ZMW",
+            reference_data=reference_data,
+        )
+    except lipila.LipilaNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    lipila.apply_provider_status(
+        session, transaction, provider_status, provider_payload, source="provider_response"
+    )
+    session.refresh(transaction)
+
+    return MemberPayment(
+        transaction_id=transaction.id,
+        amount=transaction.amount,
+        status=transaction.status,
+        provider_status=transaction.provider_status,
+        provider_reference=transaction.provider_reference,
+        card_redirect_url=lipila.find_card_redirect_url(provider_payload),
+    )
+
+
+@router.post("/{group_id}/members", response_model=MemberInviteResponse, status_code=201)
+async def add_group_member(
     group_id: int,
     payload: MemberInvite,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_active_user),
-) -> Membership:
+) -> MemberInviteResponse:
     if not _is_platform_admin(current_user):
         _require_group_admin(session, group_id=group_id, user=current_user)
 
@@ -202,6 +281,18 @@ def add_group_member(
     if existing:
         raise HTTPException(status_code=400, detail="User already exists")
 
+    amount = payload.min_initial_deposit or 0
+
+    # Reject an unusable number before creating anything, so a typo does not
+    # leave a half-made member behind.
+    if payload.collect_initial_contribution:
+        if amount <= 0:
+            raise HTTPException(status_code=400, detail="An initial contribution amount is required to collect it")
+        try:
+            lipila.normalize_zambian_phone(payload.phone_number)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     user = create_user(
         session,
         UserCreate(
@@ -212,6 +303,14 @@ def add_group_member(
         ),
     )
 
+    custom_fields = dict(payload.custom_fields or {})
+    if payload.phone_number:
+        custom_fields["phone"] = payload.phone_number
+    # What the member agreed to put in. Kept whether or not it is collected now,
+    # so a deferred contribution is still owed rather than forgotten.
+    if amount > 0 and not payload.collect_initial_contribution:
+        custom_fields["initial_contribution_due"] = amount
+
     account = Account(
         name=payload.name,
         email=payload.email,
@@ -219,7 +318,7 @@ def add_group_member(
         group_name=group.name,
         user_id=user.id,
         balance=0,
-        custom_fields=payload.custom_fields,
+        custom_fields=custom_fields,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
@@ -227,28 +326,68 @@ def add_group_member(
     session.commit()
     session.refresh(account)
 
-    if payload.min_initial_deposit and payload.min_initial_deposit > 0:
-        tx = Transaction(
-            account_id=account.id,
-            amount=payload.min_initial_deposit,
-            type=TransactionType.DEPOSIT,
-            status=TransactionStatus.COMPLETED,
-            description="Initial contribution",
-            custom_fields={"months_covered": 1},
-            created_at=datetime.utcnow(),
-        )
-        account.balance += payload.min_initial_deposit
-        account.updated_at = datetime.utcnow()
-        session.add(tx)
-        session.add(account)
-        session.commit()
-        session.refresh(account)
-
     membership = Membership(group_id=group_id, user_id=user.id, account_id=account.id, role=MembershipRole.MEMBER)
     session.add(membership)
     session.commit()
     session.refresh(membership)
-    return membership
+
+    payment = None
+    if payload.collect_initial_contribution:
+        payment = await _start_contribution_collection(
+            session,
+            account,
+            amount=amount,
+            phone_number=payload.phone_number,
+            channel=PaymentChannel.MOBILE_MONEY,
+            description="Initial contribution",
+        )
+
+    return MemberInviteResponse(
+        membership=MembershipRead.model_validate(membership, from_attributes=True),
+        payment=payment,
+        initial_contribution_due=custom_fields.get("initial_contribution_due"),
+    )
+
+
+@router.post("/{group_id}/members/{account_id}/collect", response_model=MemberPayment, status_code=201)
+async def collect_member_contribution(
+    group_id: int,
+    account_id: int,
+    payload: MemberContributionRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
+) -> MemberPayment:
+    """Collect from a member who deferred at sign-up and is now ready to pay."""
+    account = session.get(Account, account_id)
+    if not account or account.group_id != group_id:
+        raise HTTPException(status_code=404, detail="Member not found in this group")
+
+    # A member may pay their own way in; anyone else has to be running the group.
+    if account.user_id != current_user.id and not _is_platform_admin(current_user):
+        _require_group_admin(session, group_id=group_id, user=current_user)
+
+    due = (account.custom_fields or {}).get("initial_contribution_due")
+    amount = payload.amount if payload.amount is not None else due
+    if amount is None:
+        raise HTTPException(status_code=400, detail="No amount given and none is outstanding")
+
+    payment = await _start_contribution_collection(
+        session,
+        account,
+        amount=float(amount),
+        phone_number=payload.phone_number,
+        channel=payload.channel,
+        description="Initial contribution" if due else "Contribution",
+    )
+
+    # The debt is settled by the payment landing, not by asking for it, so the
+    # marker stays until the webhook confirms.
+    if payload.phone_number:
+        account.custom_fields = {**(account.custom_fields or {}), "phone": payload.phone_number}
+        session.add(account)
+        session.commit()
+
+    return payment
 
 
 @router.post("/{group_id}/accept-terms", response_model=MembershipRead)

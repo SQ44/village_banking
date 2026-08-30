@@ -165,8 +165,35 @@ export interface MemberInvitePayload {
   full_name?: string;
   password: string;
   name: string;
+  /** Mobile money number, kept on the account for later collections. */
+  phone_number?: string;
   min_initial_deposit?: number;
+  /** Request the initial contribution now instead of recording it as owed. */
+  collect_initial_contribution?: boolean;
   custom_fields?: Record<string, any>;
+}
+
+export interface MemberPayment {
+  transaction_id: number;
+  amount: number;
+  status: TransactionStatus;
+  provider_status?: string | null;
+  provider_reference?: string | null;
+  card_redirect_url?: string | null;
+}
+
+export interface MemberInviteResponse {
+  membership: Membership;
+  /** Set when a collection was started — the member approves on their handset. */
+  payment?: MemberPayment | null;
+  /** Set when a contribution is owed but has not been requested yet. */
+  initial_contribution_due?: number | null;
+}
+
+export interface MemberContributionPayload {
+  amount?: number;
+  phone_number?: string;
+  channel?: PaymentChannel;
 }
 
 export type RepaymentFrequency = "weekly" | "monthly";
