@@ -1,36 +1,41 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any, Literal, Optional
 
 from sqlmodel import Session, select
 from sqlalchemy import func
 
 from .group_finance import net_contributions_by_account
+from .money import ZERO, money, percent_of, rate as as_rate
 from .loan_service import create_loan_internal
 from .models import GroupSettings, Loan, LoanRequest, LoanRequestStatus, LoanStatus
 
 AutoDecision = Literal["approve", "reject", "queue"]
 
 
-def _positive_contributions_total(session: Session, *, group_id: int) -> float:
+def _positive_contributions_total(session: Session, *, group_id: int) -> Decimal:
     contributions = net_contributions_by_account(session, group_id=group_id)
-    return float(sum(max(float(v), 0.0) for v in contributions.values()))
+    running = ZERO
+    for value in contributions.values():
+        running += max(money(value), ZERO)
+    return running
 
 
-def _borrower_positive_contribution(session: Session, *, group_id: int, borrower_account_id: int) -> float:
+def _borrower_positive_contribution(session: Session, *, group_id: int, borrower_account_id: int) -> Decimal:
     contributions = net_contributions_by_account(session, group_id=group_id)
-    return float(max(float(contributions.get(int(borrower_account_id), 0.0)), 0.0))
+    return max(money(contributions.get(int(borrower_account_id), 0)), ZERO)
 
 
-def _outstanding_principal_total(session: Session, *, group_id: int) -> float:
+def _outstanding_principal_total(session: Session, *, group_id: int) -> Decimal:
     total = session.exec(
         select(func.coalesce(func.sum(Loan.outstanding_principal), 0.0)).where(
             Loan.group_id == group_id,
             Loan.status == LoanStatus.ACTIVE,
         )
     ).one()
-    return float(total or 0.0)
+    return money(total or 0)
 
 
 def _active_loans_for_borrower(session: Session, *, group_id: int, borrower_account_id: int) -> int:
@@ -60,7 +65,7 @@ def evaluate_loan_request(
     session: Session,
     settings: GroupSettings,
     borrower_account_id: int,
-    principal: float,
+    principal: Decimal,
     term_months: int,
     now: datetime,
 ) -> tuple[AutoDecision, int, str, list[dict[str, Any]]]:
@@ -86,17 +91,17 @@ def evaluate_loan_request(
     )
 
     borrower_contribution = _borrower_positive_contribution(session, group_id=settings.group_id, borrower_account_id=borrower_account_id)
-    max_loan_by_multiplier: float | None = None
+    max_loan_by_multiplier: Decimal | None = None
     if settings.enforce_loan_limit:
-        max_loan_by_multiplier = borrower_contribution * float(settings.loan_limit_multiplier)
+        max_loan_by_multiplier = money(borrower_contribution * Decimal(settings.loan_limit_multiplier))
         scorecard.append(
             {
                 "rule": "loan_limit_multiplier",
-                "pass": principal <= max_loan_by_multiplier or max_loan_by_multiplier <= 0,
-                "detail": f"Requested {principal:.2f}, max {max_loan_by_multiplier:.2f} (contribution {borrower_contribution:.2f} x {float(settings.loan_limit_multiplier):.2f})",
+                "pass": principal <= max_loan_by_multiplier or max_loan_by_multiplier <= ZERO,
+                "detail": f"Requested {principal:.2f}, max {max_loan_by_multiplier:.2f} (contribution {borrower_contribution:.2f} x {Decimal(settings.loan_limit_multiplier):.2f})",
             }
         )
-        if principal > max_loan_by_multiplier and max_loan_by_multiplier > 0:
+        if principal > max_loan_by_multiplier and max_loan_by_multiplier > ZERO:
             return ("reject", clamped_term, f"Requested amount exceeds max allowed ({max_loan_by_multiplier:.2f}).", scorecard)
     else:
         scorecard.append({"rule": "loan_limit_multiplier", "pass": True, "detail": "Loan limit disabled"})
@@ -135,10 +140,11 @@ def evaluate_loan_request(
 
     pool_total = _positive_contributions_total(session, group_id=settings.group_id)
     outstanding = _outstanding_principal_total(session, group_id=settings.group_id)
-    cap_percent = float(settings.liquidity_max_outstanding_percent or 80.0)
-    allowed = (cap_percent / 100.0) * pool_total
-    after = outstanding + float(principal)
-    within = after <= allowed + 1e-9
+    cap_percent = as_rate(settings.liquidity_max_outstanding_percent or 80)
+    allowed = percent_of(pool_total, cap_percent)
+    after = outstanding + money(principal)
+    # Exact: no epsilon, because both sides are whole ngwee.
+    within = after <= allowed
     scorecard.append(
         {
             "rule": "liquidity_cap",
@@ -146,7 +152,7 @@ def evaluate_loan_request(
             "detail": f"Outstanding {outstanding:.2f} + requested {principal:.2f} <= {allowed:.2f} ({cap_percent:.1f}% of pool {pool_total:.2f})",
         }
     )
-    if pool_total <= 0:
+    if pool_total <= ZERO:
         return ("reject", clamped_term, "Pool has no contributions yet.", scorecard)
     if not within:
         return ("queue", clamped_term, "Queued: liquidity cap would be exceeded. Will auto-approve when capacity is available.", scorecard)
@@ -173,7 +179,7 @@ def auto_decide_and_apply(
         session=session,
         settings=settings,
         borrower_account_id=request.borrower_account_id,
-        principal=float(request.principal),
+        principal=money(request.principal),
         term_months=int(request.term_months),
         now=now,
     )
@@ -208,7 +214,7 @@ def auto_decide_and_apply(
         session=session,
         group_id=request.group_id,
         borrower_account_id=request.borrower_account_id,
-        principal=float(request.principal),
+        principal=money(request.principal),
         term_months=int(request.term_months),
         repayment_frequency=request.repayment_frequency,
         interest_rate_percent=request.interest_rate_percent,
@@ -217,7 +223,7 @@ def auto_decide_and_apply(
     new_custom_fields["approved_loan_id"] = loan.id
     request.custom_fields = new_custom_fields
     request.status = LoanRequestStatus.APPROVED
-    request.interest_rate_percent = float(loan.interest_rate_percent)
+    request.interest_rate_percent = as_rate(loan.interest_rate_percent)
     session.add(request)
     session.commit()
     session.refresh(request)

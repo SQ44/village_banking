@@ -81,8 +81,10 @@ class TestTransactionOverride:
             headers=admin_auth,
         )
         entry = session.exec(select(AuditLog)).first()
-        assert entry.before == {"status": "pending", "account_balance": 0.0}
-        assert entry.after == {"status": "completed", "account_balance": 250.0}
+        # Stringified decimals, not floats: the audit record has to reproduce
+        # the exact figure, and a JSON column cannot hold a Decimal.
+        assert entry.before == {"status": "pending", "account_balance": "0.00"}
+        assert entry.after == {"status": "completed", "account_balance": "250.00"}
 
     def test_a_member_cannot_override_their_own_payment(self, client, member_auth, pending_deposit, session):
         response = client.patch(
@@ -127,8 +129,8 @@ class TestBalanceEdit:
         entry = session.exec(select(AuditLog)).first()
         assert entry is not None
         assert entry.action == audit.ACCOUNT_BALANCE_CHANGED
-        assert entry.before == {"balance": 0.0}
-        assert entry.after == {"balance": 5000.0}
+        assert entry.before == {"balance": "0.00"}
+        assert entry.after == {"balance": "5000.00"}
         assert "VB-12" in entry.reason
 
     def test_editing_other_fields_is_not_audited(self, client, admin_auth, account, session):

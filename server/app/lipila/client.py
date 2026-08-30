@@ -214,10 +214,19 @@ def _json_or_error(response: httpx.Response) -> dict[str, Any]:
     return payload
 
 
-def _decimal_json(value: Decimal) -> int | float:
-    if value == value.to_integral_value():
-        return int(value)
-    return float(value)
+def _decimal_json(value: Decimal) -> int | str:
+    """Render an amount for Lipila's JSON body.
+
+    A whole number of kwacha goes as an integer, anything else as a decimal
+    *string*. Serialising through `float` would hand the provider a value such
+    as 100.05000000000001 for K100.05, and the amount echoed back on the webhook
+    is checked against our ledger exactly — a float artefact there would park a
+    perfectly good payment on `needs_review`.
+    """
+    quantized = value.quantize(Decimal("0.01"))
+    if quantized == quantized.to_integral_value():
+        return int(quantized)
+    return format(quantized, "f")
 
 
 def _split_name(value: Optional[str]) -> tuple[str, str]:

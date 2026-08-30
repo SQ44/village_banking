@@ -1,11 +1,37 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, Optional, Literal
+from typing import Annotated, Any, Dict, Optional, Literal
 
-from pydantic import BaseModel, Field as PydanticField
+from pydantic import BaseModel, BeforeValidator, Field as PydanticField, PlainSerializer
 from sqlmodel import SQLModel
+
+from .money import money, rate
+
+# Money crossing the API boundary.
+#
+# `BeforeValidator` is where a float stops. Whatever a client sends — 300,
+# "300.00", or the 300.30000000000007 that JavaScript produces when it adds
+# 300.1 and 200.2 — becomes an exact 2dp Decimal, rounded half up, before any
+# endpoint sees it. Nothing downstream has to remember to do that.
+#
+# On the way out amounts are serialised as JSON numbers rather than strings, so
+# the existing TypeScript client keeps working. That is safe because the wire is
+# display-only: every value crossing it has already been quantized to the
+# ngwee, and anything echoed back is quantized again on the way in. The
+# exactness that matters is in the ledger, not the transport.
+Money = Annotated[
+    Decimal,
+    BeforeValidator(money),
+    PlainSerializer(float, return_type=float, when_used="json"),
+]
+Rate = Annotated[
+    Decimal,
+    BeforeValidator(rate),
+    PlainSerializer(float, return_type=float, when_used="json"),
+]
 
 from .models import (
     InstallmentStatus,
@@ -63,11 +89,11 @@ class AccountBase(MetadataMixin):
 
 
 class AccountCreate(AccountBase):
-    initial_deposit: float = 0
+    initial_deposit: Money = 0
 
 
 class AccountUpdate(AccountBase):
-    balance: Optional[float] = None
+    balance: Optional[Money] = None
     # Required when `balance` is set by hand — see `update_account`.
     reason: Optional[str] = None
 
@@ -75,7 +101,7 @@ class AccountUpdate(AccountBase):
 class AccountRead(AccountBase):
     id: int
     user_id: Optional[int] = None
-    balance: float
+    balance: Money
     last_withdrawal_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
@@ -84,9 +110,9 @@ class AccountRead(AccountBase):
 class SavingsProductBase(MetadataMixin):
     name: str
     description: Optional[str] = None
-    interest_rate: float
+    interest_rate: Rate
     compounding_days: int = 30
-    min_balance: float = 0
+    min_balance: Money = 0
 
 
 class SavingsProductCreate(SavingsProductBase):
@@ -99,7 +125,7 @@ class SavingsProductRead(SavingsProductBase):
 
 class TransactionBase(MetadataMixin):
     account_id: int
-    amount: float
+    amount: Money
     type: TransactionType
     description: Optional[str] = None
 
@@ -134,10 +160,10 @@ class TransactionStatusUpdate(SQLModel):
 
 class InterestPreview(SQLModel):
     account_id: int
-    projected_amount: float
+    projected_amount: Money
     starts_on: datetime
     ends_on: datetime
-    annual_rate: float
+    annual_rate: Rate
 
 
 class InterestApplyRequest(SQLModel):
@@ -148,7 +174,7 @@ class InterestApplyRequest(SQLModel):
 
 class DashboardStats(BaseModel):
     member_count: int
-    total_balance: float
+    total_balance: Money
     pending_transactions: int
 
 
@@ -166,12 +192,12 @@ class GroupRead(SQLModel):
 
 
 class GroupSettingsUpdate(SQLModel):
-    min_monthly_contribution: Optional[float] = None
-    admin_fee_percent: Optional[float] = None
-    loan_interest_percent: Optional[float] = None
+    min_monthly_contribution: Optional[Money] = None
+    admin_fee_percent: Optional[Rate] = None
+    loan_interest_percent: Optional[Rate] = None
     enforce_loan_limit: Optional[bool] = None
-    loan_limit_multiplier: Optional[float] = None
-    liquidity_max_outstanding_percent: Optional[float] = None
+    loan_limit_multiplier: Optional[Rate] = None
+    liquidity_max_outstanding_percent: Optional[Rate] = None
     min_term_months: Optional[int] = None
     max_term_months: Optional[int] = None
     max_active_loans_per_member: Optional[int] = None
@@ -183,12 +209,12 @@ class GroupSettingsUpdate(SQLModel):
 
 class GroupSettingsRead(SQLModel):
     group_id: int
-    min_monthly_contribution: float
-    admin_fee_percent: float
-    loan_interest_percent: float
+    min_monthly_contribution: Money
+    admin_fee_percent: Rate
+    loan_interest_percent: Rate
     enforce_loan_limit: bool
-    loan_limit_multiplier: float
-    liquidity_max_outstanding_percent: float
+    loan_limit_multiplier: Rate
+    liquidity_max_outstanding_percent: Rate
     min_term_months: int
     max_term_months: int
     max_active_loans_per_member: int
@@ -223,7 +249,7 @@ class MemberInvite(SQLModel):
     # The member's mobile money number. Kept on the account so any later
     # collection can default to it instead of asking again.
     phone_number: Optional[str] = None
-    min_initial_deposit: float = 0
+    min_initial_deposit: Money = 0
     # How to settle the initial contribution. Defaults to recording it as owed.
     initial_contribution_method: ContributionMethod = ContributionMethod.DEFER
     # Why the cash is being banked on the member's word. Required for CASH,
@@ -237,7 +263,7 @@ class MemberPayment(SQLModel):
     """The collection started for a member, if one was."""
 
     transaction_id: int
-    amount: float
+    amount: Money
     status: TransactionStatus
     provider_status: Optional[str] = None
     provider_reference: Optional[str] = None
@@ -254,13 +280,13 @@ class MemberInviteResponse(SQLModel):
     # handset; the balance moves only once Lipila confirms.
     payment: Optional[MemberPayment] = None
     # Set when an initial contribution is owed but not yet requested.
-    initial_contribution_due: Optional[float] = None
+    initial_contribution_due: Optional[Money] = None
 
 
 class MemberContributionRequest(SQLModel):
     """Collect a contribution from a member who is ready to pay."""
 
-    amount: Optional[float] = None
+    amount: Optional[Money] = None
     phone_number: Optional[str] = None
     channel: PaymentChannel = PaymentChannel.MOBILE_MONEY
     method: ContributionMethod = ContributionMethod.LIPILA
@@ -284,10 +310,10 @@ class AcceptTermsRequest(SQLModel):
 
 class LoanCreate(SQLModel):
     borrower_account_id: int
-    principal: float
+    principal: Money
     term_months: int = 1
     repayment_frequency: RepaymentFrequency = RepaymentFrequency.MONTHLY
-    interest_rate_percent: Optional[float] = None
+    interest_rate_percent: Optional[Rate] = None
     description: Optional[str] = None
 
 
@@ -295,13 +321,13 @@ class LoanRead(SQLModel):
     id: int
     group_id: int
     borrower_account_id: int
-    principal: float
-    interest_rate_percent: float
-    admin_fee_percent: float
+    principal: Money
+    interest_rate_percent: Rate
+    admin_fee_percent: Rate
     term_months: int
     repayment_frequency: RepaymentFrequency
-    outstanding_principal: float
-    outstanding_interest: float
+    outstanding_principal: Money
+    outstanding_interest: Money
     status: LoanStatus
     created_at: datetime
     disbursed_at: datetime
@@ -314,25 +340,25 @@ class LoanInstallmentRead(SQLModel):
     loan_id: int
     sequence: int
     due_date: datetime
-    principal_due: float
-    interest_due: float
+    principal_due: Money
+    interest_due: Money
     status: InstallmentStatus
     paid_at: Optional[datetime]
 
 
 class LoanRepaymentRequest(SQLModel):
-    amount: float
-    interest_component: Optional[float] = None
-    principal_component: Optional[float] = None
+    amount: Money
+    interest_component: Optional[Money] = None
+    principal_component: Optional[Money] = None
     description: Optional[str] = None
 
 
 class MemberSummary(SQLModel):
     group_id: Optional[int] = None
     account: Optional[AccountRead] = None
-    savings_balance: float = 0
-    interest_earned: float = 0
-    loan_outstanding: float = 0
+    savings_balance: Money = 0
+    interest_earned: Money = 0
+    loan_outstanding: Money = 0
     active_loan_count: int = 0
     next_withdrawal_at: Optional[datetime] = None
     days_until_withdrawal: Optional[int] = None
@@ -345,11 +371,11 @@ class LoanBoardItem(SQLModel):
     group_id: int
     borrower_account_id: int
     borrower_name: str
-    principal: float
-    interest_rate_percent: float
-    admin_fee_percent: float
-    outstanding_principal: float
-    outstanding_interest: float
+    principal: Money
+    interest_rate_percent: Rate
+    admin_fee_percent: Rate
+    outstanding_principal: Money
+    outstanding_interest: Money
     status: LoanStatus
     disbursed_at: datetime
     next_due_date: Optional[datetime] = None
@@ -358,18 +384,18 @@ class LoanBoardItem(SQLModel):
 class MemberLoanForecast(SQLModel):
     loan_id: int
     borrower_name: str
-    outstanding_interest: float
-    admin_fee_percent: float
-    distributable_interest: float
-    my_share_percent: float
-    my_expected_interest: float
+    outstanding_interest: Money
+    admin_fee_percent: Rate
+    distributable_interest: Money
+    my_share_percent: Rate
+    my_expected_interest: Money
 
 
 class MemberForecast(SQLModel):
     group_id: Optional[int] = None
-    my_net_contribution: float
-    group_total_contributions: float
-    my_share_percent: float
+    my_net_contribution: Money
+    group_total_contributions: Money
+    my_share_percent: Rate
     loans: list[MemberLoanForecast] = []
 
 
@@ -381,12 +407,12 @@ class MeContext(SQLModel):
 class GroupContributionItem(SQLModel):
     account_id: int
     member_name: str
-    net_contribution: float
-    share_percent: float
+    net_contribution: Money
+    share_percent: Rate
 
 
 class LoanRequestCreate(SQLModel):
-    principal: float
+    principal: Money
     term_months: int = 1
     repayment_frequency: RepaymentFrequency = RepaymentFrequency.MONTHLY
     description: Optional[str] = None
@@ -397,10 +423,10 @@ class LoanRequestRead(SQLModel):
     group_id: int
     borrower_account_id: int
     requester_user_id: int
-    principal: float
+    principal: Money
     term_months: int
     repayment_frequency: RepaymentFrequency
-    interest_rate_percent: Optional[float] = None
+    interest_rate_percent: Optional[Rate] = None
     status: LoanRequestStatus
     description: Optional[str] = None
     decision_reason: Optional[str] = None
@@ -413,7 +439,7 @@ class LoanRequestRead(SQLModel):
 class LoanRequestDecision(SQLModel):
     decision: Literal["approve", "reject"]
     decision_reason: Optional[str] = None
-    interest_rate_percent: Optional[float] = None
+    interest_rate_percent: Optional[Rate] = None
 
 
 # ----------------------------------------------------------------------
@@ -427,7 +453,7 @@ class StuckPaymentRead(SQLModel):
     transaction_id: int
     account_id: int
     account_name: str
-    amount: float
+    amount: Money
     type: TransactionType
     provider: Optional[str] = None
     provider_status: Optional[str] = None
@@ -456,10 +482,10 @@ class BalanceDiscrepancyRead(SQLModel):
 
     account_id: int
     account_name: str
-    stored_balance: float
-    derived_balance: float
+    stored_balance: Money
+    derived_balance: Money
     # Positive when the stored balance claims more money than the entries do.
-    difference: float
+    difference: Money
     transaction_count: int
 
 

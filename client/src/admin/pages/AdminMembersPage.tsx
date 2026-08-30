@@ -26,10 +26,17 @@ import { currency } from "../../lib/format";
 import { useAdmin } from "../adminContext";
 import type { Account, ContributionMethod } from "../../types";
 
-/** What a member still owes on joining, if anything. */
+/** What a member still owes on joining, if anything.
+ *
+ *  The server stores this as a decimal string, because the column is JSON and
+ *  JSON has no exact decimal type — a number there would reintroduce the
+ *  rounding error the ledger was converted away from. Older accounts still hold
+ *  a raw number, so both are accepted. */
 function amountDue(member: Account): number | null {
   const due = member.custom_fields?.initial_contribution_due;
-  return typeof due === "number" && due > 0 ? due : null;
+  if (due === null || due === undefined) return null;
+  const value = typeof due === "number" ? due : Number(due);
+  return Number.isFinite(value) && value > 0 ? value : null;
 }
 
 export default function AdminMembersPage() {

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlmodel import Session
 
 from .group_finance import net_contributions_by_account
+from .money import ZERO, allocate, money, percent_of, rate as as_rate
 from .models import (
     Account,
     Group,
@@ -39,10 +41,10 @@ def create_loan_internal(
     session: Session,
     group_id: int,
     borrower_account_id: int,
-    principal: float,
+    principal: Decimal,
     term_months: int,
     repayment_frequency: RepaymentFrequency,
-    interest_rate_percent: float | None,
+    interest_rate_percent: Decimal | None,
     description: str | None,
 ) -> Loan:
     group = session.get(Group, group_id)
@@ -54,31 +56,37 @@ def create_loan_internal(
     if not borrower or borrower.group_id != group_id:
         raise HTTPException(status_code=404, detail="Borrower not found in group")
 
-    rate = float(interest_rate_percent if interest_rate_percent is not None else settings.loan_interest_percent)
-    admin_fee_percent = float(settings.admin_fee_percent)
-    principal_value = float(principal)
-    if principal_value <= 0:
+    loan_rate = as_rate(interest_rate_percent if interest_rate_percent is not None else settings.loan_interest_percent)
+    admin_fee_percent = as_rate(settings.admin_fee_percent)
+    principal_value = money(principal)
+    if principal_value <= ZERO:
         raise HTTPException(status_code=400, detail="Principal must be positive")
 
     if settings.enforce_loan_limit:
         contributions = net_contributions_by_account(session, group_id=group_id)
-        contribution = max(float(contributions.get(borrower.id, 0.0)), 0.0)
-        max_loan = contribution * float(settings.loan_limit_multiplier)
-        if principal_value > max_loan and max_loan > 0:
+        contribution = max(money(contributions.get(borrower.id, 0)), ZERO)
+        max_loan = money(contribution * Decimal(settings.loan_limit_multiplier))
+        if principal_value > max_loan and max_loan > ZERO:
             raise HTTPException(status_code=400, detail=f"Loan exceeds limit (max {max_loan:.2f})")
 
     periods = calc_periods(term_months, repayment_frequency)
-    total_interest = round(principal_value * (rate / 100.0), 2)
-    principal_each = round(principal_value / periods, 2)
-    interest_each = round(total_interest / periods, 2)
-    principal_last = round(principal_value - principal_each * (periods - 1), 2)
-    interest_last = round(total_interest - interest_each * (periods - 1), 2)
+    total_interest = percent_of(principal_value, loan_rate)
+
+    # Principal and interest are each split across the installments with the
+    # same largest-remainder rule used to share interest between members, so the
+    # schedule adds back to exactly what was borrowed and exactly what is owed
+    # on it. The alternative — divide, round, and let the final payment absorb
+    # whatever is left over — also balances, but concentrates every rounding
+    # decision on one installment instead of spreading it a ngwee at a time.
+    equal_weights = [(index, Decimal(1)) for index in range(1, periods + 1)]
+    principal_schedule = dict(allocate(principal_value, equal_weights))
+    interest_schedule = dict(allocate(total_interest, equal_weights))
 
     loan = Loan(
         group_id=group_id,
         borrower_account_id=borrower.id,
         principal=principal_value,
-        interest_rate_percent=rate,
+        interest_rate_percent=loan_rate,
         admin_fee_percent=admin_fee_percent,
         term_months=term_months,
         repayment_frequency=repayment_frequency,
@@ -101,8 +109,8 @@ def create_loan_internal(
             loan_id=loan.id,
             sequence=idx,
             due_date=schedule_due_date(loan.disbursed_at, frequency=repayment_frequency, step=idx),
-            principal_due=principal_last if idx == periods else principal_each,
-            interest_due=interest_last if idx == periods else interest_each,
+            principal_due=principal_schedule.get(idx, ZERO),
+            interest_due=interest_schedule.get(idx, ZERO),
             status=InstallmentStatus.DUE,
         )
         session.add(installment)
@@ -117,7 +125,7 @@ def create_loan_internal(
         custom_fields={"loan_id": loan.id, "group_id": group_id},
         created_at=datetime.utcnow(),
     )
-    borrower.balance -= principal_value
+    borrower.balance = money(borrower.balance) - principal_value
     borrower.updated_at = datetime.utcnow()
     session.add(tx)
     session.add(borrower)

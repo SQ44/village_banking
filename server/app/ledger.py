@@ -8,6 +8,7 @@ drift from the other.
 from datetime import datetime
 
 from .models import Account, Transaction, TransactionStatus, TransactionType
+from .money import money
 
 # Types that add to a member's balance when they complete; everything else
 # takes away from it.
@@ -35,13 +36,19 @@ def is_credit(transaction: Transaction) -> bool:
 
 
 def apply_balance(account: Account, transaction: Transaction) -> None:
-    """Move the balance in the direction this transaction implies."""
+    """Move the balance in the direction this transaction implies.
+
+    Both operands are exact 2dp Decimals, so the sum is exact too: no rounding
+    happens here and none is needed. That is what allows `reconciliation` to
+    compare a balance against its entries with `==`.
+    """
+    amount = money(transaction.amount)
     if is_credit(transaction):
-        account.balance += transaction.amount
+        account.balance = money(account.balance) + amount
     else:
-        if account.balance < transaction.amount:
+        if money(account.balance) < amount:
             raise InsufficientFunds("Insufficient funds")
-        account.balance -= transaction.amount
+        account.balance = money(account.balance) - amount
     account.updated_at = datetime.utcnow()
 
 
@@ -59,10 +66,11 @@ def reverse_balance(account: Account, transaction: Transaction) -> None:
     disbursements until it is settled. `reconciliation.check_all` reports the
     account so an operator sees it rather than discovering it later.
     """
+    amount = money(transaction.amount)
     if is_credit(transaction):
-        account.balance -= transaction.amount
+        account.balance = money(account.balance) - amount
     else:
-        account.balance += transaction.amount
+        account.balance = money(account.balance) + amount
     account.updated_at = datetime.utcnow()
 
 

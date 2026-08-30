@@ -1,24 +1,41 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 
 from sqlmodel import Session
 
 from .models import Account, InterestAccrual, Transaction, TransactionStatus, TransactionType
+from .money import CURRENCY_EXPONENT, ZERO, money, rate
+
+# Simple daily interest on a 365-day year, the convention this app has always
+# used. Stated as a constant so the day-count basis is visible rather than
+# buried in an expression.
+DAYS_IN_YEAR = Decimal(365)
 
 
-def calculate_interest(balance: float, annual_rate: float, days: int) -> float:
+def calculate_interest(balance: Decimal, annual_rate: Decimal, days: int) -> Decimal:
+    """Interest earned over `days`, quantized once at the end.
+
+    The daily rate is deliberately *not* rounded before it is applied: rounding
+    a rate to the ngwee and then multiplying by a period would compound the
+    error across the term. The full-precision product is computed first and
+    only the resulting amount is quantized, half up.
+    """
+    balance, annual_rate = money(balance), rate(annual_rate)
     if annual_rate <= 0 or balance <= 0 or days <= 0:
-        return 0
-    daily_rate = annual_rate / 100 / 365
-    return round(balance * daily_rate * days, 2)
+        return ZERO
+    with localcontext() as ctx:
+        ctx.prec = 28
+        raw = balance * (annual_rate / Decimal(100) / DAYS_IN_YEAR) * Decimal(days)
+    return raw.quantize(CURRENCY_EXPONENT, rounding=ROUND_HALF_UP)
 
 
 def apply_interest(
     session: Session,
     account: Account,
     *,
-    annual_rate: float,
+    annual_rate: Decimal,
     period_start: datetime,
     period_end: datetime,
 ) -> tuple[InterestAccrual, Transaction | None]:
@@ -50,8 +67,8 @@ def apply_interest(
     session.flush()  # Assigns accrual.id for the transaction to point at.
 
     transaction: Transaction | None = None
-    if amount > 0:
-        account.balance += amount
+    if amount > ZERO:
+        account.balance = money(account.balance) + amount
         account.updated_at = datetime.utcnow()
         transaction = Transaction(
             account_id=account.id,

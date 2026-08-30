@@ -84,8 +84,8 @@ class TestItIsRecorded:
         assert entry.action == "cash_contribution_recorded"
         assert entry.actor_user_id == admin.id
         assert entry.actor_email == "admin@example.com"
-        assert entry.before == {"balance": 0.0}
-        assert entry.after["balance"] == 300.0
+        assert entry.before == {"balance": "0.00"}
+        assert entry.after["balance"] == "300.00"
         assert "two witnesses" in entry.reason
 
     def test_the_audit_entry_points_at_the_transaction(self, client, admin_auth, session, group, account):

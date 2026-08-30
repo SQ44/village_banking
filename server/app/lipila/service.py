@@ -17,6 +17,7 @@ from sqlmodel import Session, select
 
 from ..config import Settings
 from ..ledger import InsufficientFunds, apply_status_change
+from ..money import money
 from ..models import (
     Account,
     PaymentChannel,
@@ -157,9 +158,9 @@ def find_live_collection(
 
     # Compared in minor units so 100.005 and 100.0049 are not read as different
     # requests by float noise alone.
-    target = Decimal(str(amount)).quantize(Decimal("0.01"))
+    target = money(amount)
     for candidate in candidates:
-        if Decimal(str(candidate.amount)).quantize(Decimal("0.01")) == target:
+        if money(candidate.amount) == target:
             return candidate
     return None
 
@@ -195,7 +196,7 @@ async def start_collection(
         raise LipilaNotConfigured("lipila_api_key is not configured")
 
     client = LipilaClient(settings)
-    amount_major = Decimal(str(transaction.amount)).quantize(Decimal("0.01"))
+    amount_major = money(transaction.amount)
     narration = transaction.description or default_narration(transaction, account)
 
     try:
@@ -250,7 +251,7 @@ async def start_payout(
         raise PayoutsDisabled("lipila payouts are disabled")
 
     client = LipilaClient(settings)
-    amount_major = Decimal(str(transaction.amount)).quantize(Decimal("0.01"))
+    amount_major = money(transaction.amount)
     narration = transaction.description or default_narration(transaction, account)
 
     try:
@@ -373,7 +374,7 @@ def _payload_matches_ledger(
     if amount_present:
         if amount_major is None:
             return False
-        if Decimal(str(transaction.amount)).quantize(Decimal("0.01")) != amount_major:
+        if money(transaction.amount) != amount_major:
             return False
     currency = find_payload_value(payload, ("currency",))
     ledger_currency = str((transaction.custom_fields or {}).get("currency") or "ZMW").upper()

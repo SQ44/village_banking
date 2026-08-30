@@ -135,6 +135,32 @@ The dashboard talks directly to the FastAPI service. Ensure `VITE_API_URL` point
 
 
 
+## Money
+
+Every amount in this system is a `Decimal` carrying exactly two decimal places, stored as `NUMERIC(12, 2)`. Nothing uses `float`. The rules are stated in `server/app/money.py` and enforced in one place, so they can be pointed at rather than inferred:
+
+| | Rule |
+|---|---|
+| **Precision** | Amounts are quantized to 0.01 (the ngwee) on the way in. Rates are held to 4 places and only become money when applied to an amount, quantized once at the end. |
+| **Rounding** | `ROUND_HALF_UP` — a half-ngwee rounds away from zero (2.675 → 2.68). Python's built-in `round()` does *not* do this; it rounds half to even (2.675 → 2.67), which is right for statistics and wrong for money. |
+| **Splitting a pot** | Largest-remainder method. Everyone gets their whole ngwee; leftovers go one at a time to whoever the flooring shortchanged most. The parts always add back to exactly the whole. |
+| **Reproducibility** | Ties in that distribution break on the recipient's id, so the same books split the same way every time they are run. |
+| **Boundaries** | Amounts arrive as JSON and are quantized before any endpoint sees them, so `300.30000000000007` from JavaScript becomes `300.30`. They leave as JSON numbers, which keeps the wire format unchanged. Amounts inside JSON columns are stored as decimal strings. |
+
+Because amounts are exact, the reconciliation check compares a stored balance to the sum of its entries with `==`. It previously had to allow half a ngwee of slack — and that slack was a place a genuine one-ngwee error could have hidden from the check indefinitely.
+
+### Restating an existing database
+
+Balances written before this conversion can sit on values no currency has (`7784.760000000002`). The application reads them back cleanly, so it behaves correctly either way; what needs fixing is the stored record.
+
+```bash
+cd server
+python scripts/migrate_money_to_decimal.py --dry-run   # report what would change
+python scripts/migrate_money_to_decimal.py             # apply
+```
+
+It prints every row it restates, the before and after, and the net change per table — that listing is the audit artefact. Safe to run twice; a value already exact is left alone.
+
 ## Safety Rails
 
 - **Idempotency** – `POST /transactions`, `POST /loans/{id}/repay`, `POST /groups/{id}/members` and `.../collect` accept an `Idempotency-Key` header. The first request with a given key does the work and stores its response; a retry carrying the same key is handed that response back rather than starting a second payment. A key reused with a different body is refused (`422`), an identical request still in flight is refused (`409`), and a request that failed releases its key so a corrected retry gets through. The React client sends a key on every one of these calls and retries dropped connections automatically.
@@ -159,7 +185,7 @@ cd server
 pytest
 ```
 
-69 tests covering idempotency and double-charge protection, the reconciliation rules, the audit trail, the attention queue, repayment atomicity, and the ledger's reversal behaviour. Lipila is faked (`tests/conftest.py`) so the tests assert on how many times a collection was actually requested — the number that decides how many times a member's money can leave their wallet.
+112 tests covering the money rules (rounding, splitting, reproducibility), idempotency and double-charge protection, exact reconciliation, the audit trail, the attention queue, repayment atomicity, the ledger's reversal behaviour, and the database restatement. Lipila is faked (`tests/conftest.py`) so the tests assert on how many times a collection was actually requested — the number that decides how many times a member's money can leave their wallet.
 
 ## Scheduled Jobs & Statements
 

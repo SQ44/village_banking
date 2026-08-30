@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlmodel import Session, select
 
 from .. import audit, idempotency
+from ..money import money
 from ..auth import get_current_active_user
 from ..config import get_settings
 from ..database import get_session
@@ -144,8 +145,8 @@ async def _create_transaction(
         months = int(custom_fields.get("months_covered") or 1)
         if months < 1:
             raise HTTPException(status_code=400, detail="months_covered must be >= 1")
-        minimum = float(group_settings.min_monthly_contribution) * months
-        if minimum > 0 and payload.amount < minimum:
+        minimum = money(group_settings.min_monthly_contribution) * months
+        if minimum > 0 and money(payload.amount) < minimum:
             raise HTTPException(status_code=400, detail=f"Minimum contribution is {minimum:.2f} for {months} month(s)")
 
     if group_settings and not is_admin and payload.type == TransactionType.WITHDRAWAL and group_settings.withdrawal_cycle_days > 0:
@@ -395,7 +396,7 @@ def update_transaction(
         raise HTTPException(status_code=404, detail="Account not found for transaction")
 
     previous_status = transaction.status
-    previous_balance = float(account.balance)
+    previous_balance = money(account.balance)
 
     try:
         apply_status_change(account, transaction, new_status)
@@ -408,8 +409,9 @@ def update_transaction(
         action=audit.TRANSACTION_STATUS_CHANGED,
         entity_type="transaction",
         entity_id=transaction.id,
-        before={"status": previous_status.value, "account_balance": previous_balance},
-        after={"status": new_status.value, "account_balance": float(account.balance)},
+        # Stringified so the JSON column keeps the exact figure.
+        before={"status": previous_status.value, "account_balance": str(previous_balance)},
+        after={"status": new_status.value, "account_balance": str(money(account.balance))},
         reason=reason,
     )
 

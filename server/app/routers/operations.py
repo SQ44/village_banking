@@ -87,7 +87,7 @@ def _stuck_payments(session: Session, *, group_id: Optional[int]) -> List[StuckP
                 transaction_id=int(transaction.id),
                 account_id=int(transaction.account_id),
                 account_name=account.name if account else "(unknown account)",
-                amount=float(transaction.amount),
+                amount=transaction.amount,
                 type=transaction.type,
                 provider=transaction.provider,
                 provider_status=transaction.provider_status,

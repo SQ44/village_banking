@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -30,6 +31,7 @@ from ..models import (
     User,
 )
 from ..group_finance import net_contributions_by_account, round_allocations
+from ..money import ZERO, money, percent_of, rate as as_rate
 from ..loan_service import create_loan_internal
 from ..schemas import (
     LoanBoardItem,
@@ -128,11 +130,11 @@ def group_loan_board(
                 group_id=loan.group_id,
                 borrower_account_id=loan.borrower_account_id,
                 borrower_name=borrower_names.get(int(loan.borrower_account_id), f"Account {loan.borrower_account_id}"),
-                principal=float(loan.principal),
-                interest_rate_percent=float(loan.interest_rate_percent),
-                admin_fee_percent=float(loan.admin_fee_percent),
-                outstanding_principal=float(loan.outstanding_principal),
-                outstanding_interest=float(loan.outstanding_interest),
+                principal=loan.principal,
+                interest_rate_percent=loan.interest_rate_percent,
+                admin_fee_percent=loan.admin_fee_percent,
+                outstanding_principal=loan.outstanding_principal,
+                outstanding_interest=loan.outstanding_interest,
                 status=loan.status,
                 disbursed_at=loan.disbursed_at,
                 next_due_date=next_due_map.get(int(loan.id)),
@@ -155,7 +157,7 @@ def create_loan(
         session=session,
         group_id=group_id,
         borrower_account_id=payload.borrower_account_id,
-        principal=float(payload.principal),
+        principal=money(payload.principal),
         term_months=int(payload.term_months),
         repayment_frequency=payload.repayment_frequency,
         interest_rate_percent=payload.interest_rate_percent,
@@ -177,8 +179,8 @@ def request_loan(
     if not membership.account_id:
         raise HTTPException(status_code=400, detail="No linked member account")
 
-    principal = float(payload.principal)
-    if principal <= 0:
+    principal = money(payload.principal)
+    if principal <= ZERO:
         raise HTTPException(status_code=400, detail="Principal must be positive")
     if int(payload.term_months or 1) < 1:
         raise HTTPException(status_code=400, detail="term_months must be >= 1")
@@ -342,15 +344,19 @@ def _repay_loan(
     if payload.amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be positive")
 
-    amount = float(payload.amount)
+    amount = money(payload.amount)
     if payload.interest_component is not None or payload.principal_component is not None:
-        interest_paid = float(payload.interest_component or 0)
-        principal_paid = float(payload.principal_component or 0)
-        if round(interest_paid + principal_paid, 2) != round(amount, 2):
+        interest_paid = money(payload.interest_component or 0)
+        principal_paid = money(payload.principal_component or 0)
+        # Exact equality: both sides are quantized to the ngwee, so a split that
+        # does not add up is a real disagreement rather than a rounding artefact.
+        if interest_paid + principal_paid != amount:
             raise HTTPException(status_code=400, detail="principal_component + interest_component must equal amount")
     else:
-        interest_paid = min(float(loan.outstanding_interest), amount)
-        principal_paid = min(float(loan.outstanding_principal), amount - interest_paid)
+        # Interest first, then principal — the ordinary allocation order, and
+        # the one the group's constitution assumes when it quotes a rate.
+        interest_paid = min(money(loan.outstanding_interest), amount)
+        principal_paid = min(money(loan.outstanding_principal), amount - interest_paid)
 
     borrower = session.get(Account, loan.borrower_account_id)
     if not borrower:
@@ -359,7 +365,7 @@ def _repay_loan(
     description = payload.description or f"Loan repayment (loan {loan.id})"
     now = datetime.utcnow()
 
-    if principal_paid > 0:
+    if principal_paid > ZERO:
         tx_principal = Transaction(
             account_id=borrower.id,
             amount=principal_paid,
@@ -369,10 +375,10 @@ def _repay_loan(
             custom_fields={"loan_id": loan.id, "group_id": loan.group_id, "component": "principal"},
             created_at=now,
         )
-        borrower.balance += principal_paid
+        borrower.balance = money(borrower.balance) + principal_paid
         session.add(tx_principal)
 
-    if interest_paid > 0:
+    if interest_paid > ZERO:
         tx_interest = Transaction(
             account_id=borrower.id,
             amount=interest_paid,
@@ -382,16 +388,18 @@ def _repay_loan(
             custom_fields={"loan_id": loan.id, "group_id": loan.group_id, "component": "interest"},
             created_at=now,
         )
-        borrower.balance -= interest_paid
+        borrower.balance = money(borrower.balance) - interest_paid
         session.add(tx_interest)
 
-    loan.outstanding_interest = round(float(loan.outstanding_interest) - interest_paid, 2)
-    loan.outstanding_principal = round(float(loan.outstanding_principal) - principal_paid, 2)
-    if loan.outstanding_interest <= 0 and loan.outstanding_principal <= 0:
+    loan.outstanding_interest = money(loan.outstanding_interest) - interest_paid
+    loan.outstanding_principal = money(loan.outstanding_principal) - principal_paid
+    # Exact zero closes the loan. With floats this had to tolerate a residue;
+    # now a loan is settled when it is settled, to the ngwee.
+    if loan.outstanding_interest <= ZERO and loan.outstanding_principal <= ZERO:
         loan.status = LoanStatus.CLOSED
         loan.closed_at = now
-        loan.outstanding_interest = 0
-        loan.outstanding_principal = 0
+        loan.outstanding_interest = ZERO
+        loan.outstanding_principal = ZERO
 
     borrower.updated_at = now
     session.add(borrower)
@@ -404,34 +412,35 @@ def _repay_loan(
     session.flush()
 
     # Apply installment payments (best-effort, sequential).
-    remaining = round(interest_paid + principal_paid, 2)
+    remaining = interest_paid + principal_paid
     installments = session.exec(
         select(LoanInstallment)
         .where(LoanInstallment.loan_id == loan.id, LoanInstallment.status == InstallmentStatus.DUE)
         .order_by(LoanInstallment.sequence.asc())
     ).all()
     for inst in installments:
-        if remaining <= 0:
+        if remaining <= ZERO:
             break
-        inst_total = round(float(inst.principal_due) + float(inst.interest_due), 2)
-        if remaining + 1e-9 >= inst_total:
+        inst_total = money(inst.principal_due) + money(inst.interest_due)
+        # No epsilon needed: exact amounts compare exactly.
+        if remaining >= inst_total:
             inst.status = InstallmentStatus.PAID
             inst.paid_at = now
-            remaining = round(remaining - inst_total, 2)
+            remaining = remaining - inst_total
             session.add(inst)
     session.flush()
 
     # Distribute paid interest to group members proportional to their contributions.
-    if interest_paid > 0:
-        admin_fee = round(interest_paid * (float(loan.admin_fee_percent) / 100.0), 2)
-        distributable = round(interest_paid - admin_fee, 2)
+    if interest_paid > ZERO:
+        admin_fee = percent_of(interest_paid, as_rate(loan.admin_fee_percent))
+        distributable = interest_paid - admin_fee
 
-        if admin_fee > 0:
+        if admin_fee > ZERO:
             session.add(GroupFee(group_id=loan.group_id, amount=admin_fee, created_at=now))
 
-        if distributable > 0:
+        if distributable > ZERO:
             contributions = net_contributions_by_account(session, group_id=loan.group_id)
-            weights = [(account_id, max(amount_contributed, 0.0)) for account_id, amount_contributed in contributions.items()]
+            weights = [(account_id, max(amount_contributed, ZERO)) for account_id, amount_contributed in contributions.items()]
             allocations = round_allocations(distributable, weights)
             for account_id, amount_alloc in allocations:
                 tx = Transaction(
@@ -444,13 +453,15 @@ def _repay_loan(
                         "source": "loan_interest",
                         "loan_id": loan.id,
                         "borrower_account_id": borrower.id,
-                        "admin_fee_amount": admin_fee,
+                        # Stringified: a JSON column has no Decimal, and a
+                        # float here would reintroduce the imprecision.
+                        "admin_fee_amount": str(admin_fee),
                     },
                     created_at=now,
                 )
                 acct = session.get(Account, account_id)
                 if acct:
-                    acct.balance += amount_alloc
+                    acct.balance = money(acct.balance) + amount_alloc
                     acct.updated_at = now
                     session.add(acct)
                 session.add(tx)

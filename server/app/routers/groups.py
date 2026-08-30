@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlmodel import Session, select
 
 from .. import audit, idempotency
+from ..money import ZERO, money, percent_of
 from ..auth import create_user, get_current_active_user
 from ..config import get_settings
 from ..database import get_session
@@ -210,7 +211,7 @@ def _record_cash_contribution(
     received. That is a balance moving on somebody's word, so it is written to
     the audit log with who said it and why, and the reason is required.
     """
-    if amount <= 0:
+    if money(amount) <= ZERO:
         raise HTTPException(status_code=400, detail="Contribution amount must be greater than zero")
     if not (reason or "").strip():
         raise HTTPException(status_code=400, detail="A reason is required to record a cash contribution")
@@ -224,8 +225,8 @@ def _record_cash_contribution(
         custom_fields={"months_covered": 1, "currency": "ZMW", "settled_in": "cash"},
         created_at=datetime.utcnow(),
     )
-    before = {"balance": account.balance}
-    account.balance += amount
+    before = {"balance": str(money(account.balance))}
+    account.balance = money(account.balance) + money(amount)
     account.updated_at = datetime.utcnow()
     # Paid is paid, however it arrived.
     remaining = dict(account.custom_fields or {})
@@ -246,7 +247,7 @@ def _record_cash_contribution(
         entity_type="account",
         entity_id=account.id,
         before=before,
-        after={"balance": account.balance, "transaction_id": transaction.id},
+        after={"balance": str(money(account.balance)), "transaction_id": transaction.id},
         reason=reason.strip(),
     )
     session.commit()
@@ -279,7 +280,7 @@ async def _start_contribution_collection(
     settings = get_settings()
     if not settings.lipila_configured:
         raise HTTPException(status_code=503, detail="Lipila is not configured")
-    if amount <= 0:
+    if money(amount) <= ZERO:
         raise HTTPException(status_code=400, detail="Contribution amount must be greater than zero")
 
     raw_phone = phone_number or (account.custom_fields or {}).get("phone")
@@ -440,7 +441,8 @@ async def _add_group_member(
     # What the member agreed to put in. Kept whether or not it is collected now,
     # so a deferred contribution is still owed rather than forgotten.
     if amount > 0 and not settle_now:
-        custom_fields["initial_contribution_due"] = amount
+        # Stringified for the JSON column; `money()` reads it back exactly.
+        custom_fields["initial_contribution_due"] = str(money(amount))
 
     account = Account(
         name=payload.name,
@@ -555,7 +557,7 @@ async def _collect_member_contribution(
         return _record_cash_contribution(
             session,
             account,
-            amount=float(amount),
+            amount=money(amount),
             reason=payload.cash_reason or "",
             actor=current_user,
             description=f"{description} (cash)",
@@ -564,7 +566,7 @@ async def _collect_member_contribution(
     payment = await _start_contribution_collection(
         session,
         account,
-        amount=float(amount),
+        amount=money(amount),
         phone_number=payload.phone_number,
         channel=payload.channel,
         description=description,
@@ -637,7 +639,7 @@ def group_contributions(
         raise HTTPException(status_code=403, detail="Accept group terms first")
 
     contributions = net_contributions_by_account(session, group_id=group_id)
-    positive = {account_id: max(float(total), 0.0) for account_id, total in contributions.items()}
+    positive = {account_id: max(money(total), ZERO) for account_id, total in contributions.items()}
     group_total = sum(positive.values())
 
     accounts = session.exec(select(Account.id, Account.name).where(Account.group_id == group_id)).all()
@@ -645,13 +647,13 @@ def group_contributions(
 
     items: list[GroupContributionItem] = []
     for account_id, net in contributions.items():
-        weight = max(float(net), 0.0)
-        share = round((weight / group_total) * 100.0, 2) if group_total > 0 else 0.0
+        weight = max(money(net), ZERO)
+        share = (weight / group_total * 100) if group_total > ZERO else ZERO
         items.append(
             GroupContributionItem(
                 account_id=int(account_id),
                 member_name=names.get(int(account_id), f"Account {account_id}"),
-                net_contribution=round(float(net), 2),
+                net_contribution=money(net),
                 share_percent=share,
             )
         )

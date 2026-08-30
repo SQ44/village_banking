@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
 from .. import audit
+from ..money import ZERO, money
 from ..database import get_session
 from ..models import Account, Transaction, TransactionStatus, TransactionType
 from ..schemas import AccountCreate, AccountRead, AccountUpdate
@@ -54,7 +55,7 @@ def create_account(
     session.commit()
     session.refresh(account)
 
-    if payload.initial_deposit > 0:
+    if money(payload.initial_deposit) > ZERO:
         transaction = Transaction(
             account_id=account.id,
             amount=payload.initial_deposit,
@@ -62,7 +63,7 @@ def create_account(
             status=TransactionStatus.COMPLETED,
             description="Initial deposit",
         )
-        account.balance += payload.initial_deposit
+        account.balance = money(account.balance) + money(payload.initial_deposit)
         session.add(transaction)
         session.add(account)
         session.commit()
@@ -108,9 +109,9 @@ def update_account(
     # both a silent hand on the pot and a guaranteed reconciliation mismatch. It
     # stays available for correcting a genuinely broken account, but it has to
     # say why, and it leaves a record naming the operator.
-    previous_balance = float(account.balance)
+    previous_balance = money(account.balance)
     new_balance = updates.get("balance")
-    balance_changing = new_balance is not None and float(new_balance) != previous_balance
+    balance_changing = new_balance is not None and money(new_balance) != previous_balance
     if balance_changing and not (payload.reason or "").strip():
         raise HTTPException(status_code=400, detail="A reason is required to set a balance by hand")
 
@@ -130,8 +131,10 @@ def update_account(
             action=audit.ACCOUNT_BALANCE_CHANGED,
             entity_type="account",
             entity_id=account.id,
-            before={"balance": previous_balance},
-            after={"balance": float(account.balance)},
+            # Audit values are stringified: the JSON column would otherwise
+            # store a float and lose the exactness this record exists to prove.
+            before={"balance": str(previous_balance)},
+            after={"balance": str(money(account.balance))},
             reason=payload.reason.strip(),
         )
 

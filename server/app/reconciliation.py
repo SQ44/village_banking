@@ -13,6 +13,12 @@ So the balance stays primary and this recomputes it from the entries on a
 schedule. Cheap, and it turns a silent divergence into a named discrepancy on
 the operator's attention page.
 
+The comparison is exact. Every amount is a 2dp `Decimal`, so a balance built by
+adding entries lands on precisely the stored figure and `==` is the honest test.
+An earlier version had to allow half a ngwee of slack because the amounts were
+floats — and that slack was a place a genuine one-ngwee error could hide from
+this check forever.
+
 The rules below mirror `ledger.apply_status_change` exactly, and import its
 constants rather than restating them, so the two cannot drift apart.
 """
@@ -20,31 +26,28 @@ constants rather than restating them, so the two cannot drift apart.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Optional
 
 from sqlmodel import Session, select
 
 from .ledger import CREDIT_TYPES, OUTBOUND_TYPES
 from .models import Account, Transaction, TransactionStatus
-
-# Half a ngwee. Below this a difference is float representation noise, not a
-# real disagreement — see the note in the project README about money currently
-# being stored as float.
-TOLERANCE = 0.005
+from .money import ZERO, money
 
 
 @dataclass
 class Discrepancy:
     account_id: int
     account_name: str
-    stored_balance: float
-    derived_balance: float
+    stored_balance: Decimal
+    derived_balance: Decimal
     transaction_count: int
 
     @property
-    def difference(self) -> float:
+    def difference(self) -> Decimal:
         """Positive when the stored balance claims more money than the entries do."""
-        return round(self.stored_balance - self.derived_balance, 2)
+        return money(self.stored_balance) - money(self.derived_balance)
 
 
 @dataclass
@@ -58,7 +61,7 @@ class ReconciliationReport:
         return not self.discrepancies and not self.negative_balances
 
 
-def transaction_effect(transaction: Transaction) -> float:
+def transaction_effect(transaction: Transaction) -> Decimal:
     """What this one transaction should have done to its account's balance.
 
     Mirrors `ledger.apply_status_change`:
@@ -71,20 +74,23 @@ def transaction_effect(transaction: Transaction) -> float:
     * Everything else moves the balance only on completion.
     """
     reserved_up_front = transaction.type in OUTBOUND_TYPES and transaction.provider_reference is not None
-    amount = float(transaction.amount)
+    amount = money(transaction.amount)
 
     if reserved_up_front:
         if transaction.status == TransactionStatus.FAILED:
-            return 0.0
+            return ZERO
         return -amount
 
     if transaction.status != TransactionStatus.COMPLETED:
-        return 0.0
+        return ZERO
     return amount if transaction.type in CREDIT_TYPES else -amount
 
 
-def derived_balance(transactions: list[Transaction]) -> float:
-    return round(sum(transaction_effect(tx) for tx in transactions), 2)
+def derived_balance(transactions: list[Transaction]) -> Decimal:
+    running = ZERO
+    for transaction in transactions:
+        running += transaction_effect(transaction)
+    return running
 
 
 def check_account(session: Session, account: Account) -> Optional[Discrepancy]:
@@ -93,9 +99,10 @@ def check_account(session: Session, account: Account) -> Optional[Discrepancy]:
         session.exec(select(Transaction).where(Transaction.account_id == account.id)).all()
     )
     derived = derived_balance(transactions)
-    stored = round(float(account.balance), 2)
+    stored = money(account.balance)
 
-    if abs(stored - derived) <= TOLERANCE:
+    # Exact. Not "close enough" — there is no such thing for a member's savings.
+    if stored == derived:
         return None
 
     return Discrepancy(
@@ -125,15 +132,15 @@ def check_all(session: Session, *, group_id: Optional[int] = None) -> Reconcilia
         discrepancy = check_account(session, account)
         if discrepancy is not None:
             report.discrepancies.append(discrepancy)
-        if float(account.balance) < -TOLERANCE:
+        if money(account.balance) < ZERO:
             report.negative_balances.append(
                 Discrepancy(
                     account_id=int(account.id),
                     account_name=account.name,
-                    stored_balance=round(float(account.balance), 2),
+                    stored_balance=money(account.balance),
                     derived_balance=discrepancy.derived_balance
                     if discrepancy
-                    else round(float(account.balance), 2),
+                    else money(account.balance),
                     transaction_count=discrepancy.transaction_count if discrepancy else 0,
                 )
             )

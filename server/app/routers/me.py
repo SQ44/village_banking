@@ -8,6 +8,7 @@ from sqlalchemy import func
 
 from ..auth import get_current_active_user
 from ..database import get_session
+from ..money import ZERO, money, percent_of, rate as as_rate
 from ..group_finance import net_contributions_by_account
 from ..models import (
     Account,
@@ -87,12 +88,12 @@ def my_summary(
             Transaction.status == TransactionStatus.COMPLETED,
         )
     ).all()
-    interest_total = sum(float(tx.amount) for tx in interest_earned)
+    interest_total = sum((money(tx.amount) for tx in interest_earned), ZERO)
 
     active_loans = session.exec(
         select(Loan).where(Loan.borrower_account_id == account.id, Loan.status == LoanStatus.ACTIVE)
     ).all()
-    outstanding = sum(float(loan.outstanding_principal) + float(loan.outstanding_interest) for loan in active_loans)
+    outstanding = sum((money(loan.outstanding_principal) + money(loan.outstanding_interest) for loan in active_loans), ZERO)
 
     now = datetime.utcnow()
     next_withdrawal_at = None
@@ -127,9 +128,9 @@ def my_summary(
     return MemberSummary(
         group_id=membership.group_id,
         account=AccountRead(**account.model_dump()),
-        savings_balance=float(account.balance),
-        interest_earned=round(interest_total, 2),
-        loan_outstanding=round(outstanding, 2),
+        savings_balance=money(account.balance),
+        interest_earned=money(interest_total),
+        loan_outstanding=money(outstanding),
         active_loan_count=len(active_loans),
         next_withdrawal_at=next_withdrawal_at,
         days_until_withdrawal=days_until_withdrawal,
@@ -171,10 +172,10 @@ def my_forecast(
         raise HTTPException(status_code=403, detail="Accept group terms first")
 
     contributions = net_contributions_by_account(session, group_id=membership.group_id)
-    weights = {account_id: max(float(contributed), 0.0) for account_id, contributed in contributions.items()}
-    total = float(sum(weights.values()))
-    my_weight = float(weights.get(int(account.id), 0.0))
-    my_share_percent = round((my_weight / total) * 100.0, 2) if total > 0 else 0.0
+    weights = {account_id: max(money(contributed), ZERO) for account_id, contributed in contributions.items()}
+    total = sum(weights.values(), ZERO)
+    my_weight = money(weights.get(int(account.id), 0))
+    my_share_percent = as_rate(my_weight / total * 100) if total > ZERO else ZERO
 
     borrower_rows = session.exec(select(Account.id, Account.name).where(Account.group_id == membership.group_id)).all()
     borrower_names = {int(aid): name for aid, name in borrower_rows}
@@ -185,15 +186,17 @@ def my_forecast(
 
     loans: list[MemberLoanForecast] = []
     for loan in active_loans:
-        outstanding_interest = float(loan.outstanding_interest)
-        admin_fee_percent = float(loan.admin_fee_percent)
-        distributable = round(outstanding_interest * (1.0 - (admin_fee_percent / 100.0)), 2)
-        expected = round((distributable * my_weight / total), 2) if total > 0 else 0.0
+        outstanding_interest = money(loan.outstanding_interest)
+        admin_fee_percent = as_rate(loan.admin_fee_percent)
+        # The fee comes off first, then the remainder is shared by contribution —
+        # the same order the actual distribution uses when a repayment lands.
+        distributable = outstanding_interest - percent_of(outstanding_interest, admin_fee_percent)
+        expected = money(distributable * my_weight / total) if total > ZERO else ZERO
         loans.append(
             MemberLoanForecast(
                 loan_id=loan.id,
                 borrower_name=borrower_names.get(int(loan.borrower_account_id), f"Account {loan.borrower_account_id}"),
-                outstanding_interest=round(outstanding_interest, 2),
+                outstanding_interest=money(outstanding_interest),
                 admin_fee_percent=admin_fee_percent,
                 distributable_interest=distributable,
                 my_share_percent=my_share_percent,
@@ -203,8 +206,8 @@ def my_forecast(
 
     return MemberForecast(
         group_id=membership.group_id,
-        my_net_contribution=round(float(contributions.get(int(account.id), 0.0)), 2),
-        group_total_contributions=round(total, 2),
+        my_net_contribution=money(contributions.get(int(account.id), 0)),
+        group_total_contributions=money(total),
         my_share_percent=my_share_percent,
         loans=loans,
     )

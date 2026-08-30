@@ -1,9 +1,35 @@
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Column, JSON, String
+from sqlalchemy import Column, JSON, Numeric, String
 from sqlmodel import Field, Relationship, SQLModel
+
+from .money import (
+    MONEY_PRECISION,
+    MONEY_SCALE,
+    RATE_PRECISION,
+    RATE_SCALE,
+    ZERO,
+)
+
+
+def money_column(**kwargs: Any) -> Any:
+    """A currency column: NUMERIC(12, 2), never a float.
+
+    Declared once here so every amount in the schema has the same precision and
+    the same storage type. On PostgreSQL this is a native fixed-point column; on
+    SQLite the driver hands back an exactly-2dp `Decimal`, which is what lets
+    `reconciliation` compare a balance to its entries with `==` instead of a
+    tolerance.
+    """
+    return Field(sa_column=Column(Numeric(MONEY_PRECISION, MONEY_SCALE), **kwargs))
+
+
+def rate_column(**kwargs: Any) -> Any:
+    """A percentage column: NUMERIC(9, 4). Rates carry more places than money."""
+    return Field(sa_column=Column(Numeric(RATE_PRECISION, RATE_SCALE), **kwargs))
 
 
 class TransactionType(str, Enum):
@@ -46,9 +72,9 @@ class SavingsProduct(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
     description: Optional[str] = None
-    interest_rate: float = Field(description="Annual interest rate as a percentage")
+    interest_rate: Decimal = rate_column(nullable=False)
     compounding_days: int = Field(default=30)
-    min_balance: float = Field(default=0)
+    min_balance: Decimal = money_column(nullable=False, default=0)
     custom_fields: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
     accounts: List["Account"] = Relationship(back_populates="product")
@@ -69,16 +95,17 @@ class Group(SQLModel, table=True):
 class GroupSettings(SQLModel, table=True):
     group_id: int = Field(foreign_key="group.id", primary_key=True)
 
-    min_monthly_contribution: float = Field(default=0)
-    admin_fee_percent: float = Field(default=0, description="Percent of loan interest kept as admin fee")
-    loan_interest_percent: float = Field(default=10, description="Default loan interest percent")
+    min_monthly_contribution: Decimal = money_column(nullable=False, default=0)
+    # Percent of loan interest kept as an administration fee.
+    admin_fee_percent: Decimal = rate_column(nullable=False, default=0)
+    loan_interest_percent: Decimal = rate_column(nullable=False, default=10)
 
     enforce_loan_limit: bool = Field(default=True)
-    loan_limit_multiplier: float = Field(default=2, description="Max loan = contribution * multiplier")
+    # Max loan = contribution * multiplier.
+    loan_limit_multiplier: Decimal = rate_column(nullable=False, default=2)
 
-    liquidity_max_outstanding_percent: float = Field(
-        default=80, description="Total outstanding principal must be <= percent of pool"
-    )
+    # Total outstanding principal must stay at or below this percent of the pool.
+    liquidity_max_outstanding_percent: Decimal = rate_column(nullable=False, default=80)
     min_term_months: int = Field(default=1)
     max_term_months: int = Field(default=12)
     max_active_loans_per_member: int = Field(default=1)
@@ -120,7 +147,7 @@ class Account(SQLModel, table=True):
     group_name: Optional[str] = Field(default=None, index=True)
     group_id: Optional[int] = Field(default=None, foreign_key="group.id", index=True)
     user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
-    balance: float = Field(default=0)
+    balance: Decimal = money_column(nullable=False, default=0)
     last_withdrawal_at: Optional[datetime] = None
 
     product_id: Optional[int] = Field(default=None, foreign_key="savingsproduct.id")
@@ -144,7 +171,7 @@ class PaymentChannel(str, Enum):
 class Transaction(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     account_id: int = Field(foreign_key="account.id")
-    amount: float
+    amount: Decimal = money_column(nullable=False)
     type: TransactionType
     status: TransactionStatus = Field(default=TransactionStatus.PENDING)
     description: Optional[str] = None
@@ -273,10 +300,10 @@ class LoanRequest(SQLModel, table=True):
     borrower_account_id: int = Field(foreign_key="account.id", index=True)
     requester_user_id: int = Field(foreign_key="user.id", index=True)
 
-    principal: float
+    principal: Decimal = money_column(nullable=False)
     term_months: int = Field(default=1)
     repayment_frequency: RepaymentFrequency = Field(default=RepaymentFrequency.MONTHLY)
-    interest_rate_percent: Optional[float] = None
+    interest_rate_percent: Optional[Decimal] = rate_column(nullable=True, default=None)
 
     status: LoanRequestStatus = Field(default=LoanRequestStatus.REQUESTED, index=True)
     description: Optional[str] = None
@@ -293,15 +320,15 @@ class Loan(SQLModel, table=True):
     group_id: int = Field(foreign_key="group.id", index=True)
     borrower_account_id: int = Field(foreign_key="account.id", index=True)
 
-    principal: float
-    interest_rate_percent: float
-    admin_fee_percent: float = Field(default=0)
+    principal: Decimal = money_column(nullable=False)
+    interest_rate_percent: Decimal = rate_column(nullable=False)
+    admin_fee_percent: Decimal = rate_column(nullable=False, default=0)
 
     term_months: int = Field(default=1)
     repayment_frequency: RepaymentFrequency = Field(default=RepaymentFrequency.MONTHLY)
 
-    outstanding_principal: float
-    outstanding_interest: float = Field(default=0)
+    outstanding_principal: Decimal = money_column(nullable=False)
+    outstanding_interest: Decimal = money_column(nullable=False, default=0)
     status: LoanStatus = Field(default=LoanStatus.ACTIVE)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     disbursed_at: datetime = Field(default_factory=datetime.utcnow)
@@ -321,8 +348,8 @@ class LoanInstallment(SQLModel, table=True):
     loan_id: int = Field(foreign_key="loan.id", index=True)
     sequence: int = Field(index=True)
     due_date: datetime
-    principal_due: float
-    interest_due: float
+    principal_due: Decimal = money_column(nullable=False)
+    interest_due: Decimal = money_column(nullable=False)
     status: InstallmentStatus = Field(default=InstallmentStatus.DUE)
     paid_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -333,7 +360,7 @@ class LoanInstallment(SQLModel, table=True):
 class GroupFee(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     group_id: int = Field(foreign_key="group.id", index=True)
-    amount: float
+    amount: Decimal = money_column(nullable=False)
     description: str = Field(default="Administration fee")
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -342,11 +369,11 @@ class GroupFee(SQLModel, table=True):
 class InterestAccrual(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     account_id: int = Field(foreign_key="account.id")
-    amount: float
+    amount: Decimal = money_column(nullable=False)
     applied_on: datetime = Field(default_factory=datetime.utcnow)
     period_start: datetime
     period_end: datetime
-    annual_rate: float
+    annual_rate: Decimal = rate_column(nullable=False)
     custom_fields: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
     account: "Account" = Relationship()
