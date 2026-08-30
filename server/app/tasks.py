@@ -10,6 +10,7 @@ from .interest import apply_interest
 from .lipila import service as lipila
 from .models import Account, InterestAccrual, SavingsProduct, Transaction, TransactionStatus
 from .notifications import send_email
+from .reconciliation import check_all
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -26,10 +27,45 @@ def schedule_jobs() -> None:
         return
     scheduler.add_job(run_scheduled_interest, "cron", hour=1, minute=0)
     scheduler.add_job(generate_weekly_statements, "cron", day_of_week="fri", hour=6, minute=0)
+    scheduler.add_job(run_balance_reconciliation, "cron", hour=2, minute=0)
     if settings.lipila_configured:
         scheduler.add_job(reconcile_pending_payments, "interval", minutes=2)
     scheduler.start()
-    logger.info("Background scheduler started with interest + statement jobs")
+    logger.info("Background scheduler started with interest + statement + reconciliation jobs")
+
+
+def run_balance_reconciliation() -> None:
+    """Prove every stored balance against the entries behind it, nightly.
+
+    Runs after the interest job so the night's accruals are included. It only
+    reports — a mismatch is a symptom whose cause needs a human, and silently
+    "correcting" a balance would destroy the evidence of what went wrong.
+    Findings are served to admins at `GET /operations/attention`.
+    """
+    logger.info("Running nightly balance reconciliation")
+    with Session(engine) as session:
+        report = check_all(session)
+
+    if report.ok:
+        logger.info("Reconciliation clean across %s accounts", report.checked)
+        return
+
+    for item in report.discrepancies:
+        logger.error(
+            "Balance mismatch on account %s (%s): stored %.2f, ledger says %.2f, difference %.2f",
+            item.account_id,
+            item.account_name,
+            item.stored_balance,
+            item.derived_balance,
+            item.difference,
+        )
+    for item in report.negative_balances:
+        logger.error(
+            "Negative balance on account %s (%s): %.2f",
+            item.account_id,
+            item.account_name,
+            item.stored_balance,
+        )
 
 
 async def reconcile_pending_payments() -> None:
@@ -78,7 +114,7 @@ def run_scheduled_interest() -> None:
             days_since = (now - period_start).days
             if days_since < product.compounding_days:
                 continue
-            accrual = apply_interest(
+            accrual, _transaction = apply_interest(
                 session,
                 account,
                 annual_rate=product.interest_rate,

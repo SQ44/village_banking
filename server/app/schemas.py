@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, Optional, Literal
 
 from pydantic import BaseModel, Field as PydanticField
@@ -67,6 +68,8 @@ class AccountCreate(AccountBase):
 
 class AccountUpdate(AccountBase):
     balance: Optional[float] = None
+    # Required when `balance` is set by hand — see `update_account`.
+    reason: Optional[str] = None
 
 
 class AccountRead(AccountBase):
@@ -124,6 +127,9 @@ class TransactionRead(TransactionBase):
 
 class TransactionStatusUpdate(SQLModel):
     status: TransactionStatus
+    # Required by the endpoint. A hand-made balance change with no stated reason
+    # is exactly what the audit log exists to prevent, so "who" is not enough.
+    reason: Optional[str] = None
 
 
 class InterestPreview(SQLModel):
@@ -197,6 +203,18 @@ class GroupWithSettings(GroupRead):
     settings: GroupSettingsRead
 
 
+class ContributionMethod(str, Enum):
+    """How an initial contribution is settled."""
+
+    # Ask Lipila for it; the member approves on their handset.
+    LIPILA = "lipila"
+    # Handed over in person. An admin attests to it, so it is banked at once and
+    # written to the audit log with who said so and why.
+    CASH = "cash"
+    # Not settled yet. Recorded as owed and collected whenever they are ready.
+    DEFER = "defer"
+
+
 class MemberInvite(SQLModel):
     email: str
     full_name: Optional[str] = None
@@ -206,9 +224,12 @@ class MemberInvite(SQLModel):
     # collection can default to it instead of asking again.
     phone_number: Optional[str] = None
     min_initial_deposit: float = 0
-    # Ask Lipila for the initial contribution as the member is added. When false
-    # the amount is recorded as owed and collected whenever they are ready.
-    collect_initial_contribution: bool = False
+    # How to settle the initial contribution. Defaults to recording it as owed.
+    initial_contribution_method: ContributionMethod = ContributionMethod.DEFER
+    # Why the cash is being banked on the member's word. Required for CASH,
+    # because a balance that moves without a payment behind it needs a reason
+    # on the record.
+    cash_reason: Optional[str] = None
     custom_fields: Dict[str, Any] = PydanticField(default_factory=dict)
 
 
@@ -221,6 +242,10 @@ class MemberPayment(SQLModel):
     provider_status: Optional[str] = None
     provider_reference: Optional[str] = None
     card_redirect_url: Optional[str] = None
+    # True when this is a prompt that was already waiting on the member's
+    # handset rather than a new one. The caller tells the operator so, instead
+    # of implying a second prompt was sent.
+    already_pending: bool = False
 
 
 class MemberInviteResponse(SQLModel):
@@ -238,6 +263,8 @@ class MemberContributionRequest(SQLModel):
     amount: Optional[float] = None
     phone_number: Optional[str] = None
     channel: PaymentChannel = PaymentChannel.MOBILE_MONEY
+    method: ContributionMethod = ContributionMethod.LIPILA
+    cash_reason: Optional[str] = None
 
 
 class MembershipRead(SQLModel):
@@ -387,3 +414,72 @@ class LoanRequestDecision(SQLModel):
     decision: Literal["approve", "reject"]
     decision_reason: Optional[str] = None
     interest_rate_percent: Optional[float] = None
+
+
+# ----------------------------------------------------------------------
+# Operations: what needs a person, and who has moved money by hand.
+# ----------------------------------------------------------------------
+
+
+class StuckPaymentRead(SQLModel):
+    """A payment that will not resolve itself."""
+
+    transaction_id: int
+    account_id: int
+    account_name: str
+    amount: float
+    type: TransactionType
+    provider: Optional[str] = None
+    provider_status: Optional[str] = None
+    provider_reference: Optional[str] = None
+    created_at: datetime
+    last_provider_sync_at: Optional[datetime] = None
+    minutes_waiting: int
+    # "needs_review" (the provider's answer could not be trusted) or
+    # "no_confirmation" (nothing came back at all).
+    reason: str
+
+
+class StuckEventRead(SQLModel):
+    """A verified webhook that could not be matched to a transaction."""
+
+    event_id: int
+    provider: str
+    webhook_id: str
+    provider_reference: Optional[str] = None
+    created_at: datetime
+    payload: Dict[str, Any] = PydanticField(default_factory=dict)
+
+
+class BalanceDiscrepancyRead(SQLModel):
+    """An account whose stored balance the ledger entries do not explain."""
+
+    account_id: int
+    account_name: str
+    stored_balance: float
+    derived_balance: float
+    # Positive when the stored balance claims more money than the entries do.
+    difference: float
+    transaction_count: int
+
+
+class AttentionReport(SQLModel):
+    stuck_payments: list[StuckPaymentRead] = []
+    dead_letter_events: list[StuckEventRead] = []
+    balance_discrepancies: list[BalanceDiscrepancyRead] = []
+    negative_balances: list[BalanceDiscrepancyRead] = []
+    accounts_checked: int = 0
+    generated_at: datetime
+
+
+class AuditEntryRead(SQLModel):
+    id: int
+    actor_user_id: Optional[int] = None
+    actor_email: Optional[str] = None
+    action: str
+    entity_type: str
+    entity_id: str
+    reason: Optional[str] = None
+    before: Dict[str, Any] = PydanticField(default_factory=dict)
+    after: Dict[str, Any] = PydanticField(default_factory=dict)
+    created_at: datetime

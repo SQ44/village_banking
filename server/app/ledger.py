@@ -46,7 +46,19 @@ def apply_balance(account: Account, transaction: Transaction) -> None:
 
 
 def reverse_balance(account: Account, transaction: Transaction) -> None:
-    """Undo a movement that was applied earlier."""
+    """Undo a movement that was applied earlier.
+
+    This can drive a balance below zero, and deliberately does. A deposit that
+    settles, gets spent, and is then charged back by the provider leaves the
+    member genuinely overdrawn — the money left the group. Clamping at zero
+    would invent the difference and hide the debt, so the true number is kept
+    instead.
+
+    Nothing further can be spent from it: `apply_balance` refuses any debit an
+    account cannot cover, so a negative balance blocks withdrawals and
+    disbursements until it is settled. `reconciliation.check_all` reports the
+    account so an operator sees it rather than discovering it later.
+    """
     if is_credit(transaction):
         account.balance -= transaction.amount
     else:

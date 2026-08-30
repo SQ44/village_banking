@@ -9,7 +9,7 @@ it arrives on the response, on a webhook, or on a status poll — funnels throug
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -39,6 +39,12 @@ PAYOUT_TYPES = {TransactionType.WITHDRAWAL, TransactionType.LOAN_DISBURSEMENT}
 # eight once a country code is included, so anything below that is a typo.
 _MIN_E164_DIGITS = 8
 _MAX_E164_DIGITS = 15
+
+# How long an unanswered prompt is treated as still live. A member has this long
+# to pick up their handset before an identical request is read as a new
+# contribution rather than a repeat of the last one. Lipila's own prompts expire
+# in a few minutes, so this errs slightly short of that.
+DUPLICATE_COLLECTION_WINDOW = timedelta(minutes=5)
 
 
 class LipilaNotConfigured(RuntimeError):
@@ -113,6 +119,49 @@ def network_for_phone(account_number: str) -> str:
 
 def new_reference() -> str:
     return f"VB-{secrets.token_hex(8).upper()}"
+
+
+def find_live_collection(
+    session: Session,
+    *,
+    account_id: int,
+    amount: float,
+    transaction_type: TransactionType,
+    now: Optional[datetime] = None,
+) -> Optional[Transaction]:
+    """A collection for the same account and amount that is still awaiting the member.
+
+    The idempotency key in `app.idempotency` catches a client *retrying* one
+    request. This catches the other half of the same problem: a member or an
+    admin pressing the button twice, which is two genuinely separate requests
+    carrying two different keys. Both produce the same damage — a second prompt
+    on the handset for money that has already been asked for — so both are
+    guarded.
+
+    Returning the live request rather than refusing it keeps the caller's
+    experience honest: the prompt they wanted really is on the member's phone,
+    it is just the one that was sent a moment ago.
+    """
+    now = now or datetime.utcnow()
+    cutoff = now - DUPLICATE_COLLECTION_WINDOW
+
+    candidates = session.exec(
+        select(Transaction)
+        .where(Transaction.account_id == account_id)
+        .where(Transaction.type == transaction_type)
+        .where(Transaction.status == TransactionStatus.PENDING)
+        .where(Transaction.provider == PROVIDER_NAME)
+        .where(Transaction.created_at >= cutoff)
+        .order_by(Transaction.created_at.desc())
+    ).all()
+
+    # Compared in minor units so 100.005 and 100.0049 are not read as different
+    # requests by float noise alone.
+    target = Decimal(str(amount)).quantize(Decimal("0.01"))
+    for candidate in candidates:
+        if Decimal(str(candidate.amount)).quantize(Decimal("0.01")) == target:
+            return candidate
+    return None
 
 
 def default_narration(transaction: Transaction, account: Account) -> str:

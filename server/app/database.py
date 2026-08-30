@@ -83,6 +83,18 @@ def _migrate_sqlite() -> None:
                 )
             )
 
+        # The idempotency table is useless without its unique index — that index
+        # is the claim that stops a retry starting a second payment — so it is
+        # asserted here as well as declared on the model, for the same reason as
+        # the one above: SQLite will not add a UNIQUE column in place.
+        if _sqlite_table_exists(conn, "idempotencyrecord"):
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_idempotencyrecord_scope "
+                    "ON idempotencyrecord (scope)"
+                )
+            )
+
 
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)

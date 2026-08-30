@@ -69,7 +69,11 @@ def apply_interest_route(
     else:
         rate = account.product.interest_rate
 
-    accrual: InterestAccrual = apply_interest(
+    # `apply_interest` writes the ledger entry itself, in the same commit as the
+    # accrual and the balance change. This route used to add a second one after
+    # the fact, which left a window where the balance had moved and nothing
+    # explained it.
+    accrual, transaction = apply_interest(
         session,
         account,
         annual_rate=rate,
@@ -77,16 +81,17 @@ def apply_interest_route(
         period_end=request.end,
     )
 
-    transaction = Transaction(
-        account_id=account.id,
-        amount=accrual.amount,
-        type=TransactionType.INTEREST,
-        status=TransactionStatus.COMPLETED,
-        description=f"Interest for {request.start.date()} - {request.end.date()}",
-        custom_fields={"interest_accrual_id": accrual.id},
-        created_at=datetime.utcnow(),
-    )
-    session.add(transaction)
-    session.commit()
-    session.refresh(transaction)
+    if transaction is None:
+        # Nothing was earned over this period, so there is no movement to
+        # report. Answer with a zero entry rather than inventing a ledger row.
+        return Transaction(
+            id=0,
+            account_id=account.id,
+            amount=0.0,
+            type=TransactionType.INTEREST,
+            status=TransactionStatus.COMPLETED,
+            description=f"No interest for {request.start.date()} - {request.end.date()}",
+            custom_fields={"interest_accrual_id": accrual.id},
+            created_at=datetime.utcnow(),
+        )
     return transaction

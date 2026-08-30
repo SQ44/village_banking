@@ -12,6 +12,7 @@ from .routers import (
     interest_router,
     loans,
     me,
+    operations,
     products,
     transactions,
     webhooks,
@@ -56,4 +57,5 @@ app.include_router(auth_router.router)
 app.include_router(groups.router)
 app.include_router(loans.router)
 app.include_router(me.router)
+app.include_router(operations.router)
 app.include_router(webhooks.router)

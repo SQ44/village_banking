@@ -178,6 +178,77 @@ class ProviderEvent(SQLModel, table=True):
     processed_at: Optional[datetime] = Field(default=None)
 
 
+class IdempotencyRecord(SQLModel, table=True):
+    """One money-moving request, remembered so a retry cannot repeat the work.
+
+    `ProviderEvent` protects the inbound direction — Lipila telling us the same
+    thing twice. This protects the other direction: our own client asking for
+    the same thing twice. A phone on a weak network cannot tell a lost reply
+    from a lost request, so it retries; without this the retry would start a
+    second collection and put a second prompt on the member's handset against
+    the same money.
+
+    The first attempt claims the key and stores what it answered. A retry
+    carrying that key is handed the stored answer back instead of doing the work
+    again.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # The key is scoped to the endpoint and the caller, so two users cannot
+    # collide on the same key and one endpoint's key cannot replay on another.
+    scope: str = Field(
+        sa_column=Column("scope", String(400), unique=True, index=True, nullable=False)
+    )
+    endpoint: str
+    user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+
+    # Hash of the request body. The same key arriving with a different body is a
+    # client bug, not a retry, and is refused rather than answered wrongly.
+    request_fingerprint: str
+
+    # "in_progress" while the original attempt is still running, "completed"
+    # once its response is stored.
+    state: str = Field(default="in_progress", index=True)
+    response_status: Optional[int] = Field(default=None)
+    response_body: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    completed_at: Optional[datetime] = Field(default=None)
+
+
+class AuditLog(SQLModel, table=True):
+    """A record of a human moving money by hand.
+
+    Every automatic balance movement is explained by a transaction. These are
+    the movements that are not: an operator overriding a payment's status, or
+    editing a balance directly. The whole reason a group runs on this platform
+    instead of one person's notebook is so that no single person can move the
+    pot unobserved, which makes this table part of the product rather than
+    plumbing — it is served back to admins at `GET /operations/audit`.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    actor_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
+    # Copied rather than joined: the user row can be renamed or deactivated
+    # later, and an audit entry has to keep saying who it was at the time.
+    actor_email: Optional[str] = Field(default=None)
+
+    action: str = Field(index=True)
+    entity_type: str = Field(index=True)
+    entity_id: str = Field(index=True)
+
+    # Why the operator says they did it. Required by the endpoints that write
+    # here, because "who" without "why" does not settle an argument.
+    reason: Optional[str] = None
+
+    before: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    after: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
 class LoanStatus(str, Enum):
     ACTIVE = "active"
     CLOSED = "closed"

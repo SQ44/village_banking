@@ -4,6 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
+from .. import audit
 from ..database import get_session
 from ..models import Account, Transaction, TransactionStatus, TransactionType
 from ..schemas import AccountCreate, AccountRead, AccountUpdate
@@ -103,13 +104,39 @@ def update_account(
         updates.pop("group_id", None)
         updates.pop("group_name", None)
 
+    # Setting a balance here writes a number no transaction explains, which is
+    # both a silent hand on the pot and a guaranteed reconciliation mismatch. It
+    # stays available for correcting a genuinely broken account, but it has to
+    # say why, and it leaves a record naming the operator.
+    previous_balance = float(account.balance)
+    new_balance = updates.get("balance")
+    balance_changing = new_balance is not None and float(new_balance) != previous_balance
+    if balance_changing and not (payload.reason or "").strip():
+        raise HTTPException(status_code=400, detail="A reason is required to set a balance by hand")
+
     for field, value in updates.items():
+        if field == "reason":
+            continue  # Audit metadata, not a column.
         if field == "custom_fields" and value is not None:
             account.custom_fields.update(value)
         elif hasattr(account, field) and value is not None:
             setattr(account, field, value)
     account.updated_at = datetime.utcnow()
+
+    if balance_changing:
+        audit.record(
+            session,
+            actor=current_user,
+            action=audit.ACCOUNT_BALANCE_CHANGED,
+            entity_type="account",
+            entity_id=account.id,
+            before={"balance": previous_balance},
+            after={"balance": float(account.balance)},
+            reason=payload.reason.strip(),
+        )
+
     session.add(account)
+    # One commit, so the audit entry cannot be lost while the change survives.
     session.commit()
     session.refresh(account)
     return account

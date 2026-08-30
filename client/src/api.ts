@@ -1,6 +1,8 @@
 import type {
   Account,
   AccountPayload,
+  AttentionReport,
+  AuditEntry,
   DashboardStats,
   Group,
   GroupCreatePayload,
@@ -41,6 +43,41 @@ const isFormBody = (body: BodyInit | null | undefined): boolean => {
   const hasSearchParams = typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams;
   return hasFormData || hasSearchParams;
 };
+
+/** A fresh idempotency key for one user intent.
+ *
+ *  Generated once per attempt and reused across every retry of that attempt, so
+ *  the server can tell "the member wants to pay again" from "the reply to the
+ *  last request never arrived". `crypto.randomUUID` is unavailable over plain
+ *  HTTP on some Android browsers, hence the fallback. */
+export function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `vb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/** Retry a request that failed for a reason a retry could fix.
+ *
+ *  Only network-level failures are retried: a rejected request is settled news
+ *  and repeating it just annoys the server. The idempotency key rides along, so
+ *  a retry of a request that did in fact reach the server is answered with the
+ *  original response rather than starting a second payment. */
+async function withRetries<T>(attempt: () => Promise<T>, retries = 2): Promise<T> {
+  let lastError: unknown;
+  for (let index = 0; index <= retries; index += 1) {
+    try {
+      return await attempt();
+    } catch (err) {
+      // `request` throws Error for HTTP failures and TypeError for a dropped
+      // connection. Only the latter is worth another go.
+      if (!(err instanceof TypeError)) throw err;
+      lastError = err;
+      await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** index));
+    }
+  }
+  throw lastError;
+}
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers ?? {});
@@ -94,8 +131,19 @@ export const Api = {
     const query = accountId ? `?account_id=${accountId}` : "";
     return request<Transaction[]>(`/transactions${query}`);
   },
-  createTransaction: (payload: TransactionPayload) =>
-    request<Transaction>("/transactions", { method: "POST", body: JSON.stringify(payload) }),
+  /** Create a transaction, optionally collecting it through Lipila.
+   *
+   *  Carries an idempotency key: on a weak network this request is exactly the
+   *  one whose reply goes missing, and a blind retry would put a second prompt
+   *  on the member's handset for the same money. */
+  createTransaction: (payload: TransactionPayload, idempotencyKey = newIdempotencyKey()) =>
+    withRetries(() =>
+      request<Transaction>("/transactions", {
+        method: "POST",
+        body: JSON.stringify(payload),
+        headers: { "Idempotency-Key": idempotencyKey },
+      })
+    ),
   /** Re-read a Lipila payment from the provider — used after a card return, or
    *  while a member is approving a mobile money prompt on their handset. */
   refreshTransaction: (transactionId: number) =>
@@ -118,14 +166,28 @@ export const Api = {
   lockGroupConstitution: (groupId: number) =>
     request<GroupSettings>(`/groups/${groupId}/constitution/lock`, { method: "POST" }),
   getGroupMembers: (groupId: number) => request<Membership[]>(`/groups/${groupId}/members`),
-  addGroupMember: (groupId: number, payload: MemberInvitePayload) =>
-    request<MemberInviteResponse>(`/groups/${groupId}/members`, { method: "POST", body: JSON.stringify(payload) }),
+  addGroupMember: (groupId: number, payload: MemberInvitePayload, idempotencyKey = newIdempotencyKey()) =>
+    withRetries(() =>
+      request<MemberInviteResponse>(`/groups/${groupId}/members`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+        headers: { "Idempotency-Key": idempotencyKey },
+      })
+    ),
   /** Collect from a member who deferred their contribution at sign-up. */
-  collectMemberContribution: (groupId: number, accountId: number, payload: MemberContributionPayload) =>
-    request<MemberPayment>(`/groups/${groupId}/members/${accountId}/collect`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
+  collectMemberContribution: (
+    groupId: number,
+    accountId: number,
+    payload: MemberContributionPayload,
+    idempotencyKey = newIdempotencyKey()
+  ) =>
+    withRetries(() =>
+      request<MemberPayment>(`/groups/${groupId}/members/${accountId}/collect`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+        headers: { "Idempotency-Key": idempotencyKey },
+      })
+    ),
   acceptGroupTerms: (groupId: number) =>
     request<Membership>(`/groups/${groupId}/accept-terms`, { method: "POST", body: JSON.stringify({ accepted: true }) }),
   getGroupAccounts: (groupId: number) => request<Account[]>(`/groups/${groupId}/accounts`),
@@ -148,6 +210,19 @@ export const Api = {
   cancelLoanRequest: (requestId: number) =>
     request<LoanRequest>(`/loans/requests/${requestId}/cancel`, { method: "POST" }),
   getLoanSchedule: (loanId: number) => request<LoanInstallment[]>(`/loans/${loanId}/schedule`),
-  repayLoan: (loanId: number, payload: LoanRepaymentPayload) =>
-    request<Loan>(`/loans/${loanId}/repay`, { method: "POST", body: JSON.stringify(payload) }),
+  repayLoan: (loanId: number, payload: LoanRepaymentPayload, idempotencyKey = newIdempotencyKey()) =>
+    withRetries(() =>
+      request<Loan>(`/loans/${loanId}/repay`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+        headers: { "Idempotency-Key": idempotencyKey },
+      })
+    ),
+
+  /** What needs a person: stuck payments, unplaceable webhooks, balances the
+   *  ledger cannot explain. Admin only. */
+  getAttention: (groupId?: number) =>
+    request<AttentionReport>(`/operations/attention${groupId ? `?group_id=${groupId}` : ""}`),
+  /** Every balance change made by hand rather than by a transaction. */
+  getAuditTrail: (limit = 100) => request<AuditEntry[]>(`/operations/audit?limit=${limit}`),
 };

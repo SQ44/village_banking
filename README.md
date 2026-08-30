@@ -135,6 +135,32 @@ The dashboard talks directly to the FastAPI service. Ensure `VITE_API_URL` point
 
 
 
+## Safety Rails
+
+- **Idempotency** – `POST /transactions`, `POST /loans/{id}/repay`, `POST /groups/{id}/members` and `.../collect` accept an `Idempotency-Key` header. The first request with a given key does the work and stores its response; a retry carrying the same key is handed that response back rather than starting a second payment. A key reused with a different body is refused (`422`), an identical request still in flight is refused (`409`), and a request that failed releases its key so a corrected retry gets through. The React client sends a key on every one of these calls and retries dropped connections automatically.
+
+- **Duplicate prompts** – Two presses of "Send prompt" are two separate requests with two separate keys, so idempotency cannot see them as one. A collection for the same account and amount that is still awaiting the member (within five minutes) is returned as-is instead of putting a second prompt on their handset; the response carries `already_pending: true` so the UI says so.
+
+- **Attention queue** (`GET /operations/attention`, admin only) – The states the system parks things in when it cannot safely decide, finally visible: payments on `needs_review`, payments pending past a grace period with no confirmation, verified webhooks that could not be matched to any transaction, balances the ledger does not explain, and overdrawn accounts. Surfaced in the dashboard under **Needs attention**, with a sidebar badge so stuck money is visible from every page.
+
+- **Audit trail** (`GET /operations/audit`, admin only) – Every balance moved by a person rather than by a payment. `PATCH /transactions/{id}` and setting a balance via `PATCH /accounts/{id}` both now require a `reason` and record who did it, what the balance was either side, and why — written in the same database transaction as the change, so one cannot exist without the other. A group runs on this platform so that no single person can move the pot unobserved; this is what makes that true.
+
+- **Balance reconciliation** – `Account.balance` stays the primary record, and a nightly job (02:00) recomputes every account from its transactions to prove the two agree. Mismatches are reported, never silently corrected — the difference is evidence of a bug, and overwriting it destroys the evidence. The rules mirror `ledger.apply_status_change` and import its constants, so the check cannot drift from the thing it checks.
+
+- **Atomicity** – A repayment (borrower balance, loan totals, installments, and the interest distributed to every other member) commits once. So does loan creation (loan, schedule, disbursement). Previously each of these committed three or four times, so a crash partway through could leave a loan reduced with the members' share never paid.
+
+- **Overdrawn accounts** – A settled deposit that is later reversed after the member has spent it leaves a genuinely negative balance. That is kept rather than clamped to zero, because clamping would invent the difference and hide the debt. Nothing further can be spent from it, and it appears on the attention page.
+
+## Tests
+
+```bash
+cd server
+. .venv/bin/activate
+pytest
+```
+
+69 tests covering idempotency and double-charge protection, the reconciliation rules, the audit trail, the attention queue, repayment atomicity, and the ledger's reversal behaviour. Lipila is faked (`tests/conftest.py`) so the tests assert on how many times a collection was actually requested — the number that decides how many times a member's money can leave their wallet.
+
 ## Scheduled Jobs & Statements
 
 - APScheduler runs inside FastAPI (`schedule_jobs`) to handle:

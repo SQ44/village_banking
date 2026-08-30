@@ -191,7 +191,9 @@ def main() -> None:
         resp = client.patch(
             f"/transactions/{pending_tx_id}",
             headers=_auth_headers(admin_token),
-            json={"status": "completed"},
+            # Changing a transaction by hand now has to say why — the audit log
+            # exists precisely to catch unexplained balance changes.
+            json={"status": "completed", "reason": "Smoke test: confirming a pending deposit"},
         )
         record("PATCH /transactions/{id}", resp)
 

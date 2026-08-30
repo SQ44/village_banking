@@ -11,13 +11,11 @@ import {
   DialogContent,
   DialogTitle,
   FormControl,
-  FormControlLabel,
   Grid,
   InputLabel,
   MenuItem,
   Select,
   Snackbar,
-  Switch,
   TextField,
   Typography,
 } from "@mui/material";
@@ -26,6 +24,7 @@ import GroupIcon from "@mui/icons-material/Group";
 import CreditCardIcon from "@mui/icons-material/CreditCard";
 import ChecklistIcon from "@mui/icons-material/Checklist";
 import GavelIcon from "@mui/icons-material/Gavel";
+import ReportProblemIcon from "@mui/icons-material/ReportProblem";
 import AddIcon from "@mui/icons-material/Add";
 import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
 
@@ -45,6 +44,7 @@ import type {
   Loan,
   LoanCreatePayload,
   LoanRequest,
+  ContributionMethod,
   MemberInvitePayload,
   User,
 } from "../types";
@@ -76,6 +76,9 @@ export function AdminLayout({
   const [dashboard, setDashboard] = useState<DashboardStats | null>(null);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [requests, setRequests] = useState<LoanRequest[]>([]);
+  // How many things currently need a person. Loaded with everything else so the
+  // sidebar badge is right on any page, not just the attention page itself.
+  const [attentionCount, setAttentionCount] = useState(0);
   const [busy, setBusy] = useState(false);
 
   // Confirmation for actions whose result is not visible on screen — a payment
@@ -85,6 +88,10 @@ export function AdminLayout({
 
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [createGroupError, setCreateGroupError] = useState<string | null>(null);
+  // Route to visit once the current commit is done. See submitCreateGroup.
+  const [pendingRoute, setPendingRoute] = useState<string | null>(null);
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [invite, setInvite] = useState<MemberInvitePayload>({
@@ -94,7 +101,8 @@ export function AdminLayout({
     name: "",
     phone_number: "",
     min_initial_deposit: 0,
-    collect_initial_contribution: false,
+    initial_contribution_method: "defer",
+    cash_reason: "",
     custom_fields: {},
   });
 
@@ -107,6 +115,7 @@ export function AdminLayout({
     description: "",
   });
 
+  const contributionMethod: ContributionMethod = invite.initial_contribution_method ?? "defer";
   const constitutionLocked = Boolean(group?.settings?.constitution_locked_at);
   const totalSavings = members.reduce((sum, member) => sum + Number(member.balance), 0);
   const activeLoansCount = loans.filter((loan) => loan.status === "active").length;
@@ -127,19 +136,22 @@ export function AdminLayout({
         setDashboard(null);
         setLoans([]);
         setRequests([]);
+        setAttentionCount(0);
         return;
       }
 
       setSelectedGroupId(resolved);
       localStorage.setItem(GROUP_STORAGE_KEY, String(resolved));
 
-      const [details, accounts, contrib, stats, groupLoans, loanRequests] = await Promise.all([
+      const [details, accounts, contrib, stats, groupLoans, loanRequests, attention] = await Promise.all([
         Api.getGroup(resolved),
         Api.getGroupAccounts(resolved),
         Api.getGroupContributions(resolved).catch(() => []),
         Api.getDashboardForGroup(resolved).catch(() => null),
         Api.getGroupLoans(resolved),
         Api.listLoanRequests(resolved),
+        // Never fatal: a failure here must not blank the whole console.
+        Api.getAttention(resolved).catch(() => null),
       ]);
       setGroup(details);
       setMembers(accounts);
@@ -147,6 +159,14 @@ export function AdminLayout({
       setDashboard(stats);
       setLoans(groupLoans);
       setRequests(loanRequests);
+      setAttentionCount(
+        attention
+          ? attention.stuck_payments.length +
+              attention.dead_letter_events.length +
+              attention.balance_discrepancies.length +
+              attention.negative_balances.length
+          : 0
+      );
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to load admin console");
     } finally {
@@ -159,9 +179,51 @@ export function AdminLayout({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const openCreateGroup = () => setCreateGroupOpen(true);
+  const openCreateGroup = () => {
+    // Always open onto a clean form. A previous attempt's name or error has
+    // nothing to do with this one.
+    setNewGroupName("");
+    setCreateGroupError(null);
+    setCreateGroupOpen(true);
+  };
+  const closeCreateGroup = () => {
+    setCreateGroupOpen(false);
+    setCreateGroupError(null);
+  };
   const openInvite = () => setInviteOpen(true);
   const openManualLoan = () => setLoanOpen(true);
+
+  const submitCreateGroup = async () => {
+    const name = newGroupName.trim();
+    if (!name || creatingGroup) return;
+    setCreatingGroup(true);
+    setCreateGroupError(null);
+    try {
+      const created = await Api.createGroup({
+        name,
+        terms: "By joining, you agree to contribute as scheduled and repay loans on time.",
+      });
+      // Close before anything that can suspend. Navigating in the same pass as
+      // the close let an interrupted render discard it, leaving the dialog open
+      // over a group that had in fact been created — and looking, to whoever
+      // was using it, like a second prompt that would not go away.
+      setCreateGroupOpen(false);
+      setNewGroupName("");
+      await refresh(created.id);
+      setPendingRoute("/admin/settings");
+    } catch (err) {
+      setCreateGroupError(err instanceof Error ? err.message : "Failed to create group");
+    } finally {
+      setCreatingGroup(false);
+    }
+  };
+
+  // Navigation runs in its own commit, once the dialog has already closed.
+  useEffect(() => {
+    if (!pendingRoute) return;
+    setPendingRoute(null);
+    navigate(pendingRoute);
+  }, [navigate, pendingRoute]);
 
   const saveSettings = async (payload: GroupSettingsUpdatePayload) => {
     if (!selectedGroupId) return;
@@ -254,6 +316,15 @@ export function AdminLayout({
       { to: "/admin/loans", label: "Loans", icon: <CreditCardIcon />, badge: activeLoansCount },
       { to: "/admin/requests", label: "Requests", icon: <ChecklistIcon />, badge: pendingRequestsCount },
       { to: "/admin/settings", label: "Constitution", icon: <GavelIcon />, badge: constitutionLocked ? "" : "!" },
+      // Stuck payments and unexplained balances. Carries its own count so a
+      // member's money sitting in limbo is visible from every page, rather than
+      // only to whoever thinks to go looking for it.
+      {
+        to: "/admin/attention",
+        label: "Needs attention",
+        icon: <ReportProblemIcon />,
+        badge: attentionCount || undefined,
+      },
       // An action, not a destination. Only available while the constitution is
       // open — once it is locked, lending is autonomous and a hand-written loan
       // would sidestep the rules the group just agreed to.
@@ -264,7 +335,7 @@ export function AdminLayout({
         disabled: !selectedGroupId || constitutionLocked,
       },
     ],
-    [activeLoansCount, constitutionLocked, members.length, pendingRequestsCount, selectedGroupId]
+    [activeLoansCount, attentionCount, constitutionLocked, members.length, pendingRequestsCount, selectedGroupId]
   );
 
   useEffect(() => {
@@ -377,32 +448,42 @@ export function AdminLayout({
           </Alert>
         </Snackbar>
 
-        <Dialog open={createGroupOpen} onClose={() => setCreateGroupOpen(false)} fullWidth maxWidth="sm">
+        <Dialog open={createGroupOpen} onClose={closeCreateGroup} fullWidth maxWidth="sm">
           <DialogTitle>Create group</DialogTitle>
           <DialogContent>
-            <TextField label="Group name" fullWidth value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} sx={{ mt: 1 }} />
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setCreateGroupOpen(false)}>Cancel</Button>
-            <Button
-              variant="contained"
-              disabled={!newGroupName.trim() || busy}
-              onClick={async () => {
-                try {
-                  const created = await Api.createGroup({
-                    name: newGroupName.trim(),
-                    terms: "By joining, you agree to contribute as scheduled and repay loans on time.",
-                  });
-                  setCreateGroupOpen(false);
-                  setNewGroupName("");
-                  await refresh(created.id);
-                  navigate("/admin/settings");
-                } catch (err) {
-                  onError(err instanceof Error ? err.message : "Failed to create group");
+            {/* Reported inside the dialog rather than as a toast. A failure
+                leaves the dialog open, and a message that vanishes after six
+                seconds left it looking stuck for no visible reason. */}
+            {createGroupError && (
+              <Alert severity="error" sx={{ mt: 1 }} onClose={() => setCreateGroupError(null)}>
+                {createGroupError}
+              </Alert>
+            )}
+            <TextField
+              label="Group name"
+              fullWidth
+              autoFocus
+              value={newGroupName}
+              onChange={(e) => setNewGroupName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newGroupName.trim() && !creatingGroup) {
+                  e.preventDefault();
+                  void submitCreateGroup();
                 }
               }}
+              sx={{ mt: 1 }}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={closeCreateGroup} disabled={creatingGroup}>
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              disabled={!newGroupName.trim() || creatingGroup}
+              onClick={() => void submitCreateGroup()}
             >
-              Create
+              {creatingGroup ? "Creating..." : "Create"}
             </Button>
           </DialogActions>
         </Dialog>
@@ -443,20 +524,44 @@ export function AdminLayout({
               <Grid item xs={12} md={6}>
                 <TextField label="Initial contribution" fullWidth type="number" name="member-initial" autoComplete="off" value={invite.min_initial_deposit ?? 0} onChange={(e) => setInvite((p) => ({ ...p, min_initial_deposit: Number(e.target.value) }))} />
               </Grid>
+              <Grid item xs={12} md={6}>
+                <FormControl fullWidth>
+                  <InputLabel id="contribution-method-label">Initial contribution</InputLabel>
+                  <Select
+                    labelId="contribution-method-label"
+                    label="Initial contribution"
+                    value={contributionMethod}
+                    onChange={(e) =>
+                      setInvite((p) => ({ ...p, initial_contribution_method: e.target.value as ContributionMethod }))
+                    }
+                  >
+                    <MenuItem value="defer">Collect later</MenuItem>
+                    <MenuItem value="lipila">Request on their phone</MenuItem>
+                    <MenuItem value="cash">Cash received</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              {contributionMethod === "cash" && (
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    label="Reason"
+                    fullWidth
+                    name="cash-reason"
+                    autoComplete="off"
+                    placeholder="Cash handed over at the meeting"
+                    value={invite.cash_reason ?? ""}
+                    onChange={(e) => setInvite((p) => ({ ...p, cash_reason: e.target.value }))}
+                    helperText="Recorded against your name in the audit log."
+                  />
+                </Grid>
+              )}
               <Grid item xs={12}>
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={invite.collect_initial_contribution ?? false}
-                      onChange={(e) => setInvite((p) => ({ ...p, collect_initial_contribution: e.target.checked }))}
-                    />
-                  }
-                  label="Request the contribution now"
-                />
                 <Typography variant="caption" color="text.secondary" display="block">
-                  {invite.collect_initial_contribution
+                  {contributionMethod === "lipila"
                     ? "The member gets a prompt on their phone. Their savings update only once they approve it."
-                    : "The amount is recorded as owed. Collect it from the members list whenever they are ready."}
+                    : contributionMethod === "cash"
+                      ? "Banked immediately on your word — no provider confirms it, so the reason is kept on the record."
+                      : "The amount is recorded as owed. Collect it from the members list whenever they are ready."}
                 </Typography>
               </Grid>
             </Grid>
@@ -471,18 +576,21 @@ export function AdminLayout({
                 !invite.name.trim() ||
                 !invite.email.trim() ||
                 !invite.password ||
-                (invite.collect_initial_contribution &&
-                  (!invite.phone_number?.trim() || !(invite.min_initial_deposit && invite.min_initial_deposit > 0)))
+                (contributionMethod !== "defer" && !(invite.min_initial_deposit && invite.min_initial_deposit > 0)) ||
+                (contributionMethod === "lipila" && !invite.phone_number?.trim()) ||
+                (contributionMethod === "cash" && !invite.cash_reason?.trim())
               }
               onClick={async () => {
                 try {
                   const result = await Api.addGroupMember(Number(selectedGroupId), invite);
                   setInviteOpen(false);
-                  setInvite({ email: "", full_name: "", password: "", name: "", phone_number: "", min_initial_deposit: 0, collect_initial_contribution: false, custom_fields: {} });
+                  setInvite({ email: "", full_name: "", password: "", name: "", phone_number: "", min_initial_deposit: 0, initial_contribution_method: "defer", cash_reason: "", custom_fields: {} });
                   await refresh(Number(selectedGroupId));
                   if (result.payment) {
                     onNotice(
-                      `Member added. A prompt for ${currency(result.payment.amount)} was sent to their phone — their savings update once they approve it.`,
+                      result.payment.status === "completed"
+                        ? `Member added and ${currency(result.payment.amount)} banked as cash.`
+                        : `Member added. A prompt for ${currency(result.payment.amount)} was sent to their phone — their savings update once they approve it.`,
                     );
                   } else if (result.initial_contribution_due) {
                     onNotice(

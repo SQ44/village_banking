@@ -90,8 +90,11 @@ def create_loan_internal(
         disbursed_at=datetime.utcnow(),
     )
     session.add(loan)
-    session.commit()
-    session.refresh(loan)
+    # Flushed rather than committed: this assigns `loan.id` for the installments
+    # below without publishing a loan that has no schedule and no disbursement.
+    # A crash between the two would otherwise leave a borrower owing money the
+    # group never handed them.
+    session.flush()
 
     for idx in range(1, periods + 1):
         installment = LoanInstallment(
@@ -103,7 +106,7 @@ def create_loan_internal(
             status=InstallmentStatus.DUE,
         )
         session.add(installment)
-    session.commit()
+    session.flush()
 
     tx = Transaction(
         account_id=borrower.id,
@@ -118,6 +121,8 @@ def create_loan_internal(
     borrower.updated_at = datetime.utcnow()
     session.add(tx)
     session.add(borrower)
+    # The one commit: loan, schedule, disbursement and the borrower's balance
+    # all land together or not at all.
     session.commit()
     session.refresh(loan)
     return loan

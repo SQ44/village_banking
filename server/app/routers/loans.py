@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlmodel import Session, select
 from sqlalchemy import func
 
+from .. import idempotency
 from ..autonomous_lending import auto_decide_and_apply, process_queued_requests
 from ..auth import get_current_active_user
 from ..database import get_session
@@ -42,6 +43,9 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/loans", tags=["Loans"])
+
+# Scope name for the idempotency records this router writes.
+REPAY_ENDPOINT = "POST /loans/{loan_id}/repay"
 
 
 def _is_platform_admin(user: User) -> bool:
@@ -140,8 +144,9 @@ def _create_loan_internal(
         disbursed_at=datetime.utcnow(),
     )
     session.add(loan)
-    session.commit()
-    session.refresh(loan)
+    # Flushed rather than committed — see the same note in `loan_service`. The
+    # loan, its schedule and its disbursement are one event.
+    session.flush()
 
     for idx in range(1, periods + 1):
         installment = LoanInstallment(
@@ -153,7 +158,7 @@ def _create_loan_internal(
             status=InstallmentStatus.DUE,
         )
         session.add(installment)
-    session.commit()
+    session.flush()
 
     tx = Transaction(
         account_id=borrower.id,
@@ -171,6 +176,7 @@ def _create_loan_internal(
     session.commit()
     session.refresh(loan)
     return loan
+
 
 
 
@@ -395,6 +401,40 @@ def repay_loan(
     payload: LoanRepaymentRequest,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_active_user),
+    idempotency_key: Optional[str] = Header(default=None, alias=idempotency.IDEMPOTENCY_HEADER),
+) -> Loan:
+    """Record a repayment against a loan.
+
+    Send an `Idempotency-Key`: a retry after a lost reply would otherwise book
+    the repayment a second time, crediting the borrower and distributing the
+    interest twice over.
+    """
+    claim = idempotency.claim(
+        session,
+        key=idempotency_key,
+        endpoint=REPAY_ENDPOINT,
+        user_id=current_user.id,
+        payload={"loan_id": loan_id, **payload.model_dump(mode="json")},
+    )
+    if claim.replay is not None:
+        return LoanRead(**claim.replay)
+
+    try:
+        loan = _repay_loan(loan_id, payload, session, current_user)
+        result = LoanRead.model_validate(loan, from_attributes=True)
+    except Exception:
+        idempotency.release(session, claim)
+        raise
+
+    idempotency.store(session, claim, result)
+    return loan
+
+
+def _repay_loan(
+    loan_id: int,
+    payload: LoanRepaymentRequest,
+    session: Session,
+    current_user: User,
 ) -> Loan:
     loan = session.get(Loan, loan_id)
     if not loan:
@@ -463,7 +503,12 @@ def repay_loan(
     borrower.updated_at = now
     session.add(borrower)
     session.add(loan)
-    session.commit()
+    # Flushed, not committed. A repayment is one event: the borrower's balance,
+    # the loan's outstanding amounts, the installments it settles and the
+    # interest it distributes to the other members all have to land together. A
+    # commit here would let a crash further down leave the loan reduced with the
+    # members' share of the interest never paid.
+    session.flush()
 
     # Apply installment payments (best-effort, sequential).
     remaining = round(interest_paid + principal_paid, 2)
@@ -481,7 +526,7 @@ def repay_loan(
             inst.paid_at = now
             remaining = round(remaining - inst_total, 2)
             session.add(inst)
-    session.commit()
+    session.flush()
 
     # Distribute paid interest to group members proportional to their contributions.
     if interest_paid > 0:
@@ -516,8 +561,13 @@ def repay_loan(
                     acct.updated_at = now
                     session.add(acct)
                 session.add(tx)
-        session.commit()
+
+    # The single commit for the whole repayment. Everything above either lands
+    # here together or is rolled back together.
+    session.commit()
 
     session.refresh(loan)
+    # Deliberately after the commit: releasing queued loans is a consequence of
+    # the repayment, not part of it, and must not be able to roll it back.
     process_queued_requests(session, group_id=loan.group_id)
     return loan

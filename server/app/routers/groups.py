@@ -1,9 +1,10 @@
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlmodel import Session, select
 
+from .. import audit, idempotency
 from ..auth import create_user, get_current_active_user
 from ..config import get_settings
 from ..database import get_session
@@ -19,6 +20,7 @@ from ..schemas import (
     GroupSettingsRead,
     GroupSettingsUpdate,
     GroupWithSettings,
+    ContributionMethod,
     MemberContributionRequest,
     MemberInvite,
     MemberInviteResponse,
@@ -28,6 +30,10 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/groups", tags=["Groups"])
+
+# Scope names for the idempotency records these endpoints write.
+ADD_MEMBER_ENDPOINT = "POST /groups/{group_id}/members"
+COLLECT_ENDPOINT = "POST /groups/{group_id}/members/{account_id}/collect"
 
 
 def _is_platform_admin(user: User) -> bool:
@@ -189,6 +195,72 @@ def list_group_accounts(
     return session.exec(statement).all()
 
 
+def _record_cash_contribution(
+    session: Session,
+    account: Account,
+    *,
+    amount: float,
+    reason: str,
+    actor: User,
+    description: str,
+) -> MemberPayment:
+    """Bank a contribution handed over in person.
+
+    No provider confirms this one — an admin is attesting that the money was
+    received. That is a balance moving on somebody's word, so it is written to
+    the audit log with who said it and why, and the reason is required.
+    """
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Contribution amount must be greater than zero")
+    if not (reason or "").strip():
+        raise HTTPException(status_code=400, detail="A reason is required to record a cash contribution")
+
+    transaction = Transaction(
+        account_id=account.id,
+        amount=amount,
+        type=TransactionType.DEPOSIT,
+        status=TransactionStatus.COMPLETED,
+        description=description,
+        custom_fields={"months_covered": 1, "currency": "ZMW", "settled_in": "cash"},
+        created_at=datetime.utcnow(),
+    )
+    before = {"balance": account.balance}
+    account.balance += amount
+    account.updated_at = datetime.utcnow()
+    # Paid is paid, however it arrived.
+    remaining = dict(account.custom_fields or {})
+    remaining.pop("initial_contribution_due", None)
+    account.custom_fields = remaining
+
+    session.add(transaction)
+    session.add(account)
+    # Flushed for the transaction's id, not committed: the audit entry has to
+    # land in the same database transaction as the balance it explains, or a
+    # crash between two commits leaves money moved with nobody named for it.
+    session.flush()
+
+    audit.record(
+        session,
+        actor=actor,
+        action="cash_contribution_recorded",
+        entity_type="account",
+        entity_id=account.id,
+        before=before,
+        after={"balance": account.balance, "transaction_id": transaction.id},
+        reason=reason.strip(),
+    )
+    session.commit()
+    session.refresh(transaction)
+
+    return MemberPayment(
+        transaction_id=transaction.id,
+        amount=transaction.amount,
+        status=transaction.status,
+        provider_status=None,
+        provider_reference=None,
+    )
+
+
 async def _start_contribution_collection(
     session: Session,
     account: Account,
@@ -215,6 +287,27 @@ async def _start_contribution_collection(
         account_number = lipila.normalize_phone_for_channel(channel, raw_phone)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # An admin pressing "Send prompt" twice, or a member and an admin both
+    # collecting the same contribution, are separate requests that would each
+    # put a prompt on the same handset for the same money. The one already
+    # waiting is handed back instead.
+    live = lipila.find_live_collection(
+        session,
+        account_id=account.id,
+        amount=amount,
+        transaction_type=TransactionType.DEPOSIT,
+    )
+    if live is not None:
+        return MemberPayment(
+            transaction_id=live.id,
+            amount=live.amount,
+            status=live.status,
+            provider_status=live.provider_status,
+            provider_reference=live.provider_reference,
+            card_redirect_url=lipila.find_card_redirect_url((live.custom_fields or {}).get("lipila_response")),
+            already_pending=True,
+        )
 
     transaction = Transaction(
         account_id=account.id,
@@ -269,6 +362,39 @@ async def add_group_member(
     payload: MemberInvite,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_active_user),
+    idempotency_key: Optional[str] = Header(default=None, alias=idempotency.IDEMPOTENCY_HEADER),
+) -> MemberInviteResponse:
+    """Add a member, optionally collecting their initial contribution now.
+
+    Carries an `Idempotency-Key` because the request can both create a user and
+    move money: a blind retry would otherwise fail on the duplicate email having
+    already sent a payment prompt.
+    """
+    claim = idempotency.claim(
+        session,
+        key=idempotency_key,
+        endpoint=ADD_MEMBER_ENDPOINT,
+        user_id=current_user.id,
+        payload={"group_id": group_id, **payload.model_dump(mode="json")},
+    )
+    if claim.replay is not None:
+        return MemberInviteResponse(**claim.replay)
+
+    try:
+        result = await _add_group_member(group_id, payload, session, current_user)
+    except Exception:
+        idempotency.release(session, claim)
+        raise
+
+    idempotency.store(session, claim, result, status_code=201)
+    return result
+
+
+async def _add_group_member(
+    group_id: int,
+    payload: MemberInvite,
+    session: Session,
+    current_user: User,
 ) -> MemberInviteResponse:
     if not _is_platform_admin(current_user):
         _require_group_admin(session, group_id=group_id, user=current_user)
@@ -285,13 +411,18 @@ async def add_group_member(
 
     # Reject an unusable number before creating anything, so a typo does not
     # leave a half-made member behind.
-    if payload.collect_initial_contribution:
+    method = payload.initial_contribution_method
+    settle_now = method in {ContributionMethod.LIPILA, ContributionMethod.CASH}
+    if settle_now:
         if amount <= 0:
-            raise HTTPException(status_code=400, detail="An initial contribution amount is required to collect it")
-        try:
-            lipila.normalize_zambian_phone(payload.phone_number)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail="An initial contribution amount is required to settle it")
+        if method == ContributionMethod.LIPILA:
+            try:
+                lipila.normalize_zambian_phone(payload.phone_number)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        elif not (payload.cash_reason or "").strip():
+            raise HTTPException(status_code=400, detail="A reason is required to record a cash contribution")
 
     user = create_user(
         session,
@@ -308,7 +439,7 @@ async def add_group_member(
         custom_fields["phone"] = payload.phone_number
     # What the member agreed to put in. Kept whether or not it is collected now,
     # so a deferred contribution is still owed rather than forgotten.
-    if amount > 0 and not payload.collect_initial_contribution:
+    if amount > 0 and not settle_now:
         custom_fields["initial_contribution_due"] = amount
 
     account = Account(
@@ -332,7 +463,7 @@ async def add_group_member(
     session.refresh(membership)
 
     payment = None
-    if payload.collect_initial_contribution:
+    if method == ContributionMethod.LIPILA:
         payment = await _start_contribution_collection(
             session,
             account,
@@ -341,6 +472,16 @@ async def add_group_member(
             channel=PaymentChannel.MOBILE_MONEY,
             description="Initial contribution",
         )
+    elif method == ContributionMethod.CASH:
+        payment = _record_cash_contribution(
+            session,
+            account,
+            amount=amount,
+            reason=payload.cash_reason or "",
+            actor=current_user,
+            description="Initial contribution (cash)",
+        )
+        session.refresh(account)
 
     return MemberInviteResponse(
         membership=MembershipRead.model_validate(membership, from_attributes=True),
@@ -356,8 +497,41 @@ async def collect_member_contribution(
     payload: MemberContributionRequest,
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_active_user),
+    idempotency_key: Optional[str] = Header(default=None, alias=idempotency.IDEMPOTENCY_HEADER),
 ) -> MemberPayment:
-    """Collect from a member who deferred at sign-up and is now ready to pay."""
+    """Collect from a member who deferred at sign-up and is now ready to pay.
+
+    Guarded twice over: an `Idempotency-Key` catches the same request arriving
+    again after a lost reply, and `find_live_collection` catches a second press
+    of the button, which is a different request asking for the same money.
+    """
+    claim = idempotency.claim(
+        session,
+        key=idempotency_key,
+        endpoint=COLLECT_ENDPOINT,
+        user_id=current_user.id,
+        payload={"group_id": group_id, "account_id": account_id, **payload.model_dump(mode="json")},
+    )
+    if claim.replay is not None:
+        return MemberPayment(**claim.replay)
+
+    try:
+        result = await _collect_member_contribution(group_id, account_id, payload, session, current_user)
+    except Exception:
+        idempotency.release(session, claim)
+        raise
+
+    idempotency.store(session, claim, result, status_code=201)
+    return result
+
+
+async def _collect_member_contribution(
+    group_id: int,
+    account_id: int,
+    payload: MemberContributionRequest,
+    session: Session,
+    current_user: User,
+) -> MemberPayment:
     account = session.get(Account, account_id)
     if not account or account.group_id != group_id:
         raise HTTPException(status_code=404, detail="Member not found in this group")
@@ -371,13 +545,29 @@ async def collect_member_contribution(
     if amount is None:
         raise HTTPException(status_code=400, detail="No amount given and none is outstanding")
 
+    description = "Initial contribution" if due else "Contribution"
+
+    # Cash handed over at a meeting. Only whoever runs the group may attest to
+    # it — a member must not be able to credit their own balance by saying so.
+    if payload.method == ContributionMethod.CASH:
+        if account.user_id == current_user.id and not _is_platform_admin(current_user):
+            _require_group_admin(session, group_id=group_id, user=current_user)
+        return _record_cash_contribution(
+            session,
+            account,
+            amount=float(amount),
+            reason=payload.cash_reason or "",
+            actor=current_user,
+            description=f"{description} (cash)",
+        )
+
     payment = await _start_contribution_collection(
         session,
         account,
         amount=float(amount),
         phone_number=payload.phone_number,
         channel=payload.channel,
-        description="Initial contribution" if due else "Contribution",
+        description=description,
     )
 
     # The debt is settled by the payment landing, not by asking for it, so the

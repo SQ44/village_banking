@@ -60,6 +60,10 @@ export interface AccountPayload {
 
 export type PaymentChannel = "mobile_money" | "card" | "bank";
 
+/** lipila = prompt the member's handset; cash = admin attests it was handed
+ *  over; defer = record it as owed and collect later. */
+export type ContributionMethod = "lipila" | "cash" | "defer";
+
 export interface Transaction {
   id: number;
   account_id: number;
@@ -168,8 +172,10 @@ export interface MemberInvitePayload {
   /** Mobile money number, kept on the account for later collections. */
   phone_number?: string;
   min_initial_deposit?: number;
-  /** Request the initial contribution now instead of recording it as owed. */
-  collect_initial_contribution?: boolean;
+  /** How the initial contribution is settled. */
+  initial_contribution_method?: ContributionMethod;
+  /** Why cash is being banked on the member's word. Required for "cash". */
+  cash_reason?: string;
   custom_fields?: Record<string, any>;
 }
 
@@ -180,6 +186,9 @@ export interface MemberPayment {
   provider_status?: string | null;
   provider_reference?: string | null;
   card_redirect_url?: string | null;
+  /** True when this prompt was already waiting on the member's handset — the
+   *  server returned the live one instead of sending a second. */
+  already_pending?: boolean;
 }
 
 export interface MemberInviteResponse {
@@ -194,6 +203,8 @@ export interface MemberContributionPayload {
   amount?: number;
   phone_number?: string;
   channel?: PaymentChannel;
+  method?: ContributionMethod;
+  cash_reason?: string;
 }
 
 export type RepaymentFrequency = "weekly" | "monthly";
@@ -343,4 +354,66 @@ export interface InterestRequest {
   account_id: number;
   start: string;
   end: string;
+}
+
+/** A payment that will not resolve itself: either the provider said something
+ *  we could not trust (`needs_review`), or nothing came back at all. */
+export interface StuckPayment {
+  transaction_id: number;
+  account_id: number;
+  account_name: string;
+  amount: number;
+  type: TransactionType;
+  provider?: string | null;
+  provider_status?: string | null;
+  provider_reference?: string | null;
+  created_at: string;
+  last_provider_sync_at?: string | null;
+  minutes_waiting: number;
+  reason: "needs_review" | "no_confirmation";
+}
+
+/** A verified webhook that could not be matched to any transaction — the
+ *  provider talking about money this system cannot place. */
+export interface StuckEvent {
+  event_id: number;
+  provider: string;
+  webhook_id: string;
+  provider_reference?: string | null;
+  created_at: string;
+  payload: Record<string, any>;
+}
+
+/** An account whose stored balance its ledger entries do not add up to. */
+export interface BalanceDiscrepancy {
+  account_id: number;
+  account_name: string;
+  stored_balance: number;
+  derived_balance: number;
+  /** Positive when the balance claims more money than the entries do. */
+  difference: number;
+  transaction_count: number;
+}
+
+export interface AttentionReport {
+  stuck_payments: StuckPayment[];
+  dead_letter_events: StuckEvent[];
+  balance_discrepancies: BalanceDiscrepancy[];
+  negative_balances: BalanceDiscrepancy[];
+  accounts_checked: number;
+  generated_at: string;
+}
+
+/** One hand-made balance change, and who made it. */
+export interface AuditEntry {
+  id: number;
+  actor_user_id?: number | null;
+  actor_email?: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  reason?: string | null;
+  before: Record<string, any>;
+  after: Record<string, any>;
+  created_at: string;
 }

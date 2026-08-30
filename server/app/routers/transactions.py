@@ -1,9 +1,10 @@
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlmodel import Session, select
 
+from .. import audit, idempotency
 from ..auth import get_current_active_user
 from ..config import get_settings
 from ..database import get_session
@@ -22,6 +23,10 @@ from ..models import (
 from ..schemas import TransactionCreate, TransactionRead, TransactionStatusUpdate
 
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
+
+# Names the idempotency records for this endpoint, so a key used here cannot be
+# replayed against a different one.
+CREATE_ENDPOINT = "POST /transactions"
 
 def _is_platform_admin(role: str) -> bool:
     return role in {"admin", "operator"}
@@ -72,6 +77,39 @@ async def create_transaction(
     payload: TransactionCreate,
     session: Session = Depends(get_session),
     current_user=Depends(get_current_active_user),
+    idempotency_key: Optional[str] = Header(default=None, alias=idempotency.IDEMPOTENCY_HEADER),
+) -> TransactionRead:
+    """Record a transaction, optionally collecting or paying it through Lipila.
+
+    Send an `Idempotency-Key` header. A retry carrying the same key is answered
+    with the first attempt's response rather than starting a second payment.
+    """
+    claim = idempotency.claim(
+        session,
+        key=idempotency_key,
+        endpoint=CREATE_ENDPOINT,
+        user_id=current_user.id,
+        payload=payload.model_dump(mode="json"),
+    )
+    if claim.replay is not None:
+        return TransactionRead(**claim.replay)
+
+    try:
+        result = await _create_transaction(payload, session, current_user)
+    except Exception:
+        # The attempt moved no money, so the key must not stay burned — the
+        # caller fixes the input and retries with the same key.
+        idempotency.release(session, claim)
+        raise
+
+    idempotency.store(session, claim, result, status_code=201)
+    return result
+
+
+async def _create_transaction(
+    payload: TransactionCreate,
+    session: Session,
+    current_user,
 ) -> TransactionRead:
     account = session.get(Account, payload.account_id)
     if not account:
@@ -177,6 +215,20 @@ async def _create_lipila_transaction(
     is_payout = payload.type in lipila.PAYOUT_TYPES
     if not (is_collection or is_payout):
         raise HTTPException(status_code=400, detail=f"{payload.type.value} cannot be routed through Lipila")
+
+    # Two separate presses of the same button are two requests with two keys, so
+    # the idempotency key above cannot see them as one. An identical collection
+    # already waiting on the member's handset is handed back instead of putting
+    # a second prompt beside it.
+    if is_collection:
+        live = lipila.find_live_collection(
+            session,
+            account_id=account.id,
+            amount=payload.amount,
+            transaction_type=payload.type,
+        )
+        if live is not None:
+            return _read(live)
 
     channel = payload.channel
     if is_payout and channel == PaymentChannel.CARD:
@@ -318,6 +370,13 @@ def update_transaction(
     session: Session = Depends(get_session),
     current_user=Depends(get_current_active_user),
 ) -> Transaction:
+    """Override a transaction's status by hand.
+
+    This moves a member's balance on one person's say-so, which is the one thing
+    a group joins a platform to stop happening unobserved. It therefore demands
+    a reason and writes an audit entry naming the operator, in the same database
+    transaction as the change itself.
+    """
     if not _is_platform_admin(getattr(current_user, "role", "")):
         raise HTTPException(status_code=403, detail="Admins only")
     transaction = session.get(Transaction, transaction_id)
@@ -327,17 +386,36 @@ def update_transaction(
     if transaction.status == new_status:
         return transaction
 
+    reason = (payload.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="A reason is required to change a transaction by hand")
+
     account = session.get(Account, transaction.account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found for transaction")
+
+    previous_status = transaction.status
+    previous_balance = float(account.balance)
 
     try:
         apply_status_change(account, transaction, new_status)
     except InsufficientFunds:
         raise HTTPException(status_code=400, detail="Insufficient funds")
 
+    audit.record(
+        session,
+        actor=current_user,
+        action=audit.TRANSACTION_STATUS_CHANGED,
+        entity_type="transaction",
+        entity_id=transaction.id,
+        before={"status": previous_status.value, "account_balance": previous_balance},
+        after={"status": new_status.value, "account_balance": float(account.balance)},
+        reason=reason,
+    )
+
     session.add(account)
     session.add(transaction)
+    # One commit, so the audit entry and the balance move land together.
     session.commit()
     session.refresh(transaction)
     _run_queued_lending(session, account, transaction)
