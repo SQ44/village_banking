@@ -4,7 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlmodel import Session, select
 
-from .. import audit, idempotency
+from .. import audit, idempotency, journal
 from ..money import ZERO, money, percent_of
 from ..auth import create_user, get_current_active_user
 from ..config import get_settings

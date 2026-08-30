@@ -4,11 +4,11 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
-from .. import audit
+from .. import audit, journal
 from ..money import ZERO, money
 from ..database import get_session
 from ..models import Account, Transaction, TransactionStatus, TransactionType
-from ..schemas import AccountCreate, AccountRead, AccountUpdate
+from ..schemas import AccountCreate, AccountRead, AccountUpdate, StatementLineRead
 from ..auth import get_current_active_user
 
 router = APIRouter(prefix="/accounts", tags=["Accounts"])
@@ -143,3 +143,34 @@ def update_account(
     session.commit()
     session.refresh(account)
     return account
+
+
+@router.get("/{account_id}/statement", response_model=List[StatementLineRead])
+def account_statement(
+    account_id: int,
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_active_user),
+) -> List[StatementLineRead]:
+    """One member's money, in order, with the balance after each movement.
+
+    Built from the journal rather than the transaction list, so every line has
+    a counterpart: the running balance here is derived from the same entries
+    that back the group's own books, not recomputed separately from them.
+    """
+    account = session.get(Account, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if not _is_platform_admin(getattr(current_user, "role", "")) and account.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    return [
+        StatementLineRead(
+            transaction_id=line.transaction_id,
+            created_at=line.created_at,
+            description=line.description,
+            debit=line.debit,
+            credit=line.credit,
+            running_balance=line.running_balance,
+        )
+        for line in journal.statement(session, account_id=account_id)
+    ]

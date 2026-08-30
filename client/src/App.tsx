@@ -15,6 +15,7 @@ const AdminLoansPage = lazy(() => import("./admin/pages/AdminLoansPage"));
 const AdminRequestsPage = lazy(() => import("./admin/pages/AdminRequestsPage"));
 const AdminSettingsPage = lazy(() => import("./admin/pages/AdminSettingsPage"));
 const AdminAttentionPage = lazy(() => import("./admin/pages/AdminAttentionPage"));
+const AdminMoneyPage = lazy(() => import("./admin/pages/AdminMoneyPage"));
 
 const MemberLayout = lazy(() => import("./member/MemberLayout").then((m) => ({ default: m.MemberLayout })));
 const MemberOverviewPage = lazy(() => import("./member/pages/MemberOverviewPage"));
@@ -128,6 +129,7 @@ export default function App() {
             <Route path="members" element={<AdminMembersPage />} />
             <Route path="loans" element={<AdminLoansPage />} />
             <Route path="requests" element={<AdminRequestsPage />} />
+            <Route path="money" element={<AdminMoneyPage />} />
             <Route path="settings" element={<AdminSettingsPage />} />
             <Route path="attention" element={<AdminAttentionPage />} />
             <Route path="*" element={<Navigate to="overview" replace />} />

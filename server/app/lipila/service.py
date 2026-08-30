@@ -16,6 +16,7 @@ from typing import Any, Optional
 from sqlmodel import Session, select
 
 from ..config import Settings
+from .. import journal
 from ..ledger import InsufficientFunds, apply_status_change
 from ..money import money
 from ..models import (
@@ -318,6 +319,15 @@ def apply_provider_status(
     identifier = find_payload_value(payload, ("identifier", "externalId", "external_id", "transactionId"))
 
     transaction.last_provider_sync_at = datetime.utcnow()
+
+    # What Lipila kept. Recorded before settlement so the journal can name the
+    # difference between what the member paid and what the group received.
+    reported_fee = find_payload_value(payload, ("fee", "charge", "feeAmount", "fee_amount"))
+    if reported_fee is not None:
+        try:
+            transaction.provider_fee = Decimal(str(reported_fee)).quantize(Decimal("0.01"))
+        except Exception:
+            pass  # An unreadable fee is left at zero rather than guessed at.
     transaction.custom_fields = {**(transaction.custom_fields or {}), "lipila_response": payload}
 
     if not _payload_matches_ledger(transaction, payload, identifier):
@@ -342,6 +352,8 @@ def apply_provider_status(
     ledger_status = to_ledger_status(provider_status)
     try:
         apply_status_change(account, transaction, ledger_status)
+        # Book the other side while we still hold the account and the payload.
+        journal.post_transaction(session, transaction, account)
         # An initial contribution is owed until it actually arrives, so the
         # marker is cleared here rather than when the collection was requested.
         if ledger_status == TransactionStatus.COMPLETED and transaction.type == TransactionType.DEPOSIT:

@@ -10,6 +10,7 @@ from ..auth import get_current_active_user
 from ..config import get_settings
 from ..database import get_session
 from ..autonomous_lending import process_queued_requests
+from .. import journal
 from ..ledger import InsufficientFunds, apply_balance, apply_status_change
 from ..lipila import service as lipila
 from ..models import (
@@ -177,6 +178,8 @@ async def _create_transaction(
         session.add(account)
         session.commit()
         session.refresh(transaction)
+        journal.post_transaction(session, transaction, account)
+        session.commit()
         _run_queued_lending(session, account, transaction)
         return _read(transaction)
 
@@ -400,6 +403,7 @@ def update_transaction(
 
     try:
         apply_status_change(account, transaction, new_status)
+        journal.post_transaction(session, transaction, account)
     except InsufficientFunds:
         raise HTTPException(status_code=400, detail="Insufficient funds")
 

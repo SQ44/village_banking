@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -19,6 +21,7 @@ from .routers import (
 )
 from .tasks import schedule_jobs
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 app = FastAPI(
@@ -40,7 +43,26 @@ app.add_middleware(
 def on_startup() -> None:
     init_db()
     ensure_default_admin()
+    backfill_journal()
     schedule_jobs()
+
+
+def backfill_journal() -> None:
+    """Bring any unbooked history into the journal.
+
+    A database that predates double-entry has balances with no entries behind
+    them, which would make the control total read as a discrepancy on day one.
+    This books them once; afterwards it finds nothing and costs a single query.
+    """
+    from sqlmodel import Session
+
+    from . import journal
+    from .database import engine
+
+    with Session(engine) as session:
+        posted = journal.backfill(session)
+    if posted:
+        logger.info("Booked %s transaction(s) into the journal", posted)
 
 
 @app.get("/health", tags=["System"])

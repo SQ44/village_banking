@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Column, JSON, Numeric, String
+from sqlalchemy import Column, JSON, Numeric, String, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 from .money import (
@@ -187,8 +187,47 @@ class Transaction(SQLModel, table=True):
     provider_status: Optional[str] = Field(default=None)
     provider_identifier: Optional[str] = Field(default=None)
     last_provider_sync_at: Optional[datetime] = Field(default=None)
+    # What the provider kept. A member paying K100 does not put K100 in the
+    # group's hands, and a ledger recording only the gross has a hole in it
+    # that widens with every collection.
+    provider_fee: Decimal = money_column(nullable=False, default=0)
 
     account: "Account" = Relationship(back_populates="transactions")
+
+
+class JournalEntry(SQLModel, table=True):
+    """One financial event, balanced across its lines.
+
+    `reference_type` + `reference_id` identify the thing that caused it — a
+    transaction, usually — and are unique together, so an event that arrives
+    twice cannot be booked twice.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    reference_type: str = Field(index=True)
+    reference_id: str = Field(index=True)
+    group_id: Optional[int] = Field(default=None, foreign_key="group.id", index=True)
+    description: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+    __table_args__ = (UniqueConstraint("reference_type", "reference_id", name="uq_journal_reference"),)
+
+
+class JournalLine(SQLModel, table=True):
+    """One side of one entry.
+
+    Amounts are whole ngwee. Integers cannot drift the way a float can, and the
+    balance check is an equality, so the storage type has to be exact.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    journal_entry_id: int = Field(foreign_key="journalentry.id", index=True)
+    account_code: str = Field(index=True)
+    debit_minor: int = Field(default=0)
+    credit_minor: int = Field(default=0)
+    # Set on member_savings lines, so one member's statement can be pulled out.
+    account_id: Optional[int] = Field(default=None, foreign_key="account.id", index=True)
+    currency: str = Field(default="ZMW")
 
 
 class ProviderEvent(SQLModel, table=True):

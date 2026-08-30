@@ -24,6 +24,7 @@ import GroupIcon from "@mui/icons-material/Group";
 import CreditCardIcon from "@mui/icons-material/CreditCard";
 import ChecklistIcon from "@mui/icons-material/Checklist";
 import GavelIcon from "@mui/icons-material/Gavel";
+import AccountBalanceIcon from "@mui/icons-material/AccountBalance";
 import ReportProblemIcon from "@mui/icons-material/ReportProblem";
 import AddIcon from "@mui/icons-material/Add";
 import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
@@ -315,6 +316,7 @@ export function AdminLayout({
       { to: "/admin/members", label: "Members", icon: <GroupIcon />, badge: members.length },
       { to: "/admin/loans", label: "Loans", icon: <CreditCardIcon />, badge: activeLoansCount },
       { to: "/admin/requests", label: "Requests", icon: <ChecklistIcon />, badge: pendingRequestsCount },
+      { to: "/admin/money", label: "Money", icon: <AccountBalanceIcon /> },
       { to: "/admin/settings", label: "Constitution", icon: <GavelIcon />, badge: constitutionLocked ? "" : "!" },
       // Stuck payments and unexplained balances. Carries its own count so a
       // member's money sitting in limbo is visible from every page, rather than

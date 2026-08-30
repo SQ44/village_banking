@@ -417,3 +417,43 @@ export interface AuditEntry {
   after: Record<string, any>;
   created_at: string;
 }
+
+export interface TrialBalanceRow {
+  account_code: string;
+  balance: number;
+}
+
+export interface TrialBalanceReport {
+  accounts: TrialBalanceRow[];
+  /** Every entry's debits equal its credits. */
+  balanced: boolean;
+  /** Books and member balances agree. False means money moved with no entry. */
+  control_total_matches: boolean;
+  generated_at: string;
+}
+
+export interface JournalLineRead {
+  account_code: string;
+  debit: number;
+  credit: number;
+  account_id?: number | null;
+}
+
+export interface JournalEntryRead {
+  id: number;
+  reference_type: string;
+  reference_id: string;
+  group_id?: number | null;
+  description?: string | null;
+  created_at: string;
+  lines: JournalLineRead[];
+}
+
+export interface StatementLineRead {
+  transaction_id: number;
+  created_at: string;
+  description?: string | null;
+  debit: number;
+  credit: number;
+  running_balance: number;
+}

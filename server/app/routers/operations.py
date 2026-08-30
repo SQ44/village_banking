@@ -20,18 +20,23 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
 
-from .. import audit
+from .. import audit, journal
 from ..auth import get_current_active_user
 from ..database import get_session
-from ..models import Account, ProviderEvent, Transaction, TransactionStatus, User
+from ..models import Account, JournalEntry, JournalLine, ProviderEvent, Transaction, TransactionStatus, User
 from ..reconciliation import check_all
 from ..schemas import (
     AttentionReport,
     AuditEntryRead,
     BalanceDiscrepancyRead,
+    JournalEntryRead,
+    JournalLineRead,
     StuckEventRead,
     StuckPaymentRead,
+    TrialBalanceReport,
+    TrialBalanceRow,
 )
+from ..money import from_minor
 
 router = APIRouter(prefix="/operations", tags=["Operations"])
 
@@ -142,6 +147,8 @@ def attention(
 
     report = check_all(session, group_id=group_id)
     return AttentionReport(
+        books_balanced=journal.books_are_balanced(session),
+        control_total_matches=journal.control_total_matches(session, group_id=group_id),
         stuck_payments=_stuck_payments(session, group_id=group_id),
         dead_letter_events=_dead_letters(session),
         balance_discrepancies=[
@@ -183,3 +190,75 @@ def audit_trail(
     limit = max(1, min(limit, 500))
     entries = audit.recent(session, limit=limit, entity_type=entity_type)
     return [AuditEntryRead.model_validate(entry, from_attributes=True) for entry in entries]
+
+
+@router.get("/trial-balance", response_model=TrialBalanceReport)
+def trial_balance(
+    group_id: Optional[int] = None,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
+) -> TrialBalanceReport:
+    """Where the money is, in one screen.
+
+    `member_savings` is what the group owes; `lipila_settlement` and
+    `cash_on_hand` are what it actually holds. Those being different numbers is
+    the point — the gap is fees, and it was invisible until the books had two
+    sides.
+    """
+    _require_admin(current_user)
+
+    balances = journal.trial_balance(session, group_id=group_id)
+    return TrialBalanceReport(
+        accounts=[
+            TrialBalanceRow(account_code=code, balance=balance)
+            for code, balance in sorted(balances.items())
+        ],
+        balanced=journal.books_are_balanced(session),
+        control_total_matches=journal.control_total_matches(session, group_id=group_id),
+        generated_at=datetime.utcnow(),
+    )
+
+
+@router.get("/journal", response_model=List[JournalEntryRead])
+def journal_entries(
+    group_id: Optional[int] = None,
+    limit: int = 100,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
+) -> List[JournalEntryRead]:
+    """Recent entries, each with both sides, newest first."""
+    _require_admin(current_user)
+    limit = max(1, min(limit, 500))
+
+    statement = select(JournalEntry)
+    if group_id is not None:
+        statement = statement.where(JournalEntry.group_id == group_id)
+    entries = session.exec(
+        statement.order_by(JournalEntry.created_at.desc(), JournalEntry.id.desc()).limit(limit)
+    ).all()
+
+    out: List[JournalEntryRead] = []
+    for entry in entries:
+        lines = session.exec(
+            select(JournalLine).where(JournalLine.journal_entry_id == entry.id).order_by(JournalLine.id)
+        ).all()
+        out.append(
+            JournalEntryRead(
+                id=entry.id,
+                reference_type=entry.reference_type,
+                reference_id=entry.reference_id,
+                group_id=entry.group_id,
+                description=entry.description,
+                created_at=entry.created_at,
+                lines=[
+                    JournalLineRead(
+                        account_code=line.account_code,
+                        debit=from_minor(line.debit_minor),
+                        credit=from_minor(line.credit_minor),
+                        account_id=line.account_id,
+                    )
+                    for line in lines
+                ],
+            )
+        )
+    return out

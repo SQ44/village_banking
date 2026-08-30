@@ -2,6 +2,9 @@ import type {
   Account,
   AccountPayload,
   AttentionReport,
+  JournalEntryRead,
+  StatementLineRead,
+  TrialBalanceReport,
   AuditEntry,
   DashboardStats,
   Group,
@@ -224,5 +227,13 @@ export const Api = {
   getAttention: (groupId?: number) =>
     request<AttentionReport>(`/operations/attention${groupId ? `?group_id=${groupId}` : ""}`),
   /** Every balance change made by hand rather than by a transaction. */
+  getTrialBalance: (groupId?: number) =>
+    request<TrialBalanceReport>(`/operations/trial-balance${groupId ? `?group_id=${groupId}` : ""}`),
+  getJournal: (groupId?: number, limit = 100) =>
+    request<JournalEntryRead[]>(
+      `/operations/journal?limit=${limit}${groupId ? `&group_id=${groupId}` : ""}`,
+    ),
+  getAccountStatement: (accountId: number) =>
+    request<StatementLineRead[]>(`/accounts/${accountId}/statement`),
   getAuditTrail: (limit = 100) => request<AuditEntry[]>(`/operations/audit?limit=${limit}`),
 };

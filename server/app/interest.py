@@ -6,6 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP, localcontext
 from sqlmodel import Session
 
 from .models import Account, InterestAccrual, Transaction, TransactionStatus, TransactionType
+from . import journal
 from .money import CURRENCY_EXPONENT, ZERO, money, rate
 
 # Simple daily interest on a 365-day year, the convention this app has always
@@ -87,4 +88,8 @@ def apply_interest(
     session.refresh(accrual)
     if transaction is not None:
         session.refresh(transaction)
+        # Interest credited to a saver costs the group something; both sides
+        # of that belong in the books.
+        journal.post_transaction(session, transaction, account)
+        session.commit()
     return accrual, transaction

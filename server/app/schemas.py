@@ -495,6 +495,11 @@ class AttentionReport(SQLModel):
     balance_discrepancies: list[BalanceDiscrepancyRead] = []
     negative_balances: list[BalanceDiscrepancyRead] = []
     accounts_checked: int = 0
+    # Every journal entry's debits equal its credits.
+    books_balanced: bool = True
+    # What the books say members are owed equals what their accounts say. False
+    # means a balance moved without an entry behind it.
+    control_total_matches: bool = True
     generated_at: datetime
 
 
@@ -509,3 +514,47 @@ class AuditEntryRead(SQLModel):
     before: Dict[str, Any] = PydanticField(default_factory=dict)
     after: Dict[str, Any] = PydanticField(default_factory=dict)
     created_at: datetime
+
+
+class TrialBalanceRow(SQLModel):
+    account_code: str
+    balance: Decimal
+
+
+class TrialBalanceReport(SQLModel):
+    """Where the group's money is, and whether the books agree with themselves."""
+
+    accounts: list[TrialBalanceRow] = []
+    # Every entry's debits equal its credits.
+    balanced: bool = True
+    # What the books say members are owed equals what their accounts say.
+    control_total_matches: bool = True
+    generated_at: datetime
+
+
+class JournalLineRead(SQLModel):
+    account_code: str
+    debit: Decimal
+    credit: Decimal
+    account_id: Optional[int] = None
+
+
+class JournalEntryRead(SQLModel):
+    id: int
+    reference_type: str
+    reference_id: str
+    group_id: Optional[int] = None
+    description: Optional[str] = None
+    created_at: datetime
+    lines: list[JournalLineRead] = []
+
+
+class StatementLineRead(SQLModel):
+    """One movement on a member's statement."""
+
+    transaction_id: int
+    created_at: datetime
+    description: Optional[str] = None
+    debit: Decimal
+    credit: Decimal
+    running_balance: Decimal

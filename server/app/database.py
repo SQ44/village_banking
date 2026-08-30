@@ -82,6 +82,10 @@ def _migrate_sqlite() -> None:
                     'ON "transaction" (provider_reference)'
                 )
             )
+            if "provider_fee" not in cols:
+                conn.execute(
+                    text('ALTER TABLE "transaction" ADD COLUMN provider_fee NUMERIC(12, 2) NOT NULL DEFAULT 0')
+                )
 
         # The idempotency table is useless without its unique index — that index
         # is the claim that stops a retry starting a second payment — so it is
