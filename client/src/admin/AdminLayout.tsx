@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Alert,
-  Autocomplete,
   Box,
   Button,
   Chip,
@@ -13,6 +12,7 @@ import {
   FormControl,
   Grid,
   InputLabel,
+  Menu,
   MenuItem,
   Select,
   Snackbar,
@@ -27,6 +27,7 @@ import GavelIcon from "@mui/icons-material/Gavel";
 import AccountBalanceIcon from "@mui/icons-material/AccountBalance";
 import ReportProblemIcon from "@mui/icons-material/ReportProblem";
 import AddIcon from "@mui/icons-material/Add";
+import SwapHorizIcon from "@mui/icons-material/SwapHoriz";
 import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
 
 import { Api } from "../api";
@@ -34,11 +35,13 @@ import { AppShell, type NavItem } from "../layout/AppShell";
 import { currency } from "../lib/format";
 import { useColorMode } from "../colorMode";
 import { AdminContext, type AdminContextValue } from "./adminContext";
+import { isSystemAdmin } from "../types";
 import type {
   Account,
   DashboardStats,
   Group,
   GroupContributionItem,
+  GroupPerformance,
   GroupSettingsUpdatePayload,
   GroupWithSettings,
   Loan,
@@ -46,6 +49,7 @@ import type {
   LoanRequest,
   ContributionMethod,
   MemberInvitePayload,
+  Membership,
   User,
 } from "../types";
 
@@ -63,6 +67,8 @@ export function AdminLayout({
   const navigate = useNavigate();
   const location = useLocation();
   const { mode, toggle } = useColorMode();
+  const systemAdmin = isSystemAdmin(currentUser);
+  const [groupMenu, setGroupMenu] = useState<HTMLElement | null>(null);
 
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<number | "">(() => {
@@ -72,8 +78,12 @@ export function AdminLayout({
   });
   const [group, setGroup] = useState<GroupWithSettings | null>(null);
   const [members, setMembers] = useState<Account[]>([]);
+  // Roles live on the membership, not the account, so who runs the group is a
+  // separate read from who has money in it.
+  const [memberships, setMemberships] = useState<Membership[]>([]);
   const [contributions, setContributions] = useState<GroupContributionItem[]>([]);
   const [dashboard, setDashboard] = useState<DashboardStats | null>(null);
+  const [performance, setPerformance] = useState<GroupPerformance | null>(null);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [requests, setRequests] = useState<LoanRequest[]>([]);
   // How many things currently need a person. Loaded with everything else so the
@@ -131,8 +141,10 @@ export function AdminLayout({
         setSelectedGroupId("");
         setGroup(null);
         setMembers([]);
+        setMemberships([]);
         setContributions([]);
         setDashboard(null);
+        setPerformance(null);
         setLoans([]);
         setRequests([]);
         setAttentionCount(0);
@@ -142,11 +154,13 @@ export function AdminLayout({
       setSelectedGroupId(resolved);
       localStorage.setItem(GROUP_STORAGE_KEY, String(resolved));
 
-      const [details, accounts, contrib, stats, groupLoans, loanRequests, attention] = await Promise.all([
+      const [details, accounts, roles, contrib, stats, perf, groupLoans, loanRequests, attention] = await Promise.all([
         Api.getGroup(resolved),
         Api.getGroupAccounts(resolved),
+        Api.getGroupMembers(resolved).catch(() => []),
         Api.getGroupContributions(resolved).catch(() => []),
         Api.getDashboardForGroup(resolved).catch(() => null),
+        Api.getGroupPerformance(resolved).catch(() => null),
         Api.getGroupLoans(resolved),
         Api.listLoanRequests(resolved),
         // Never fatal: a failure here must not blank the whole console.
@@ -154,8 +168,10 @@ export function AdminLayout({
       ]);
       setGroup(details);
       setMembers(accounts);
+      setMemberships(roles);
       setContributions(contrib);
       setDashboard(stats);
+      setPerformance(perf);
       setLoans(groupLoans);
       setRequests(loanRequests);
       setAttentionCount(
@@ -244,24 +260,40 @@ export function AdminLayout({
     }
   };
 
+  // Switching groups is a system administrator's job. A group administrator has
+  // exactly one group, so a picker offering it back to them is noise.
+  //
+  // The switcher deliberately does not restate the current group: its name is
+  // the sidebar heading, and repeating it in the top bar put the same words on
+  // screen twice with nothing to tell them apart.
   const header = (
-    <Box display="flex" alignItems="center" gap={1} width="100%" minWidth={0}>
-      <Box minWidth={0} maxWidth={{ md: 420 }} flex={1}>
-        <Autocomplete
+    <Box display="flex" alignItems="center" gap={1.5} width="100%" minWidth={0}>
+      {systemAdmin && groups.length > 1 ? (
+        <Button
           size="small"
-          options={groups}
-          value={groups.find((g) => g.id === Number(selectedGroupId)) ?? null}
-          getOptionLabel={(option) => option.name}
-          isOptionEqualToValue={(a, b) => a.id === b.id}
-          disableClearable={groups.length > 0}
-          onChange={(_, value) => void refresh(value?.id)}
-          renderInput={(params) => <TextField {...params} label="Group" placeholder="Search groups..." />}
-          slotProps={{
-            popper: { sx: { zIndex: (t) => t.zIndex.modal + 1 } },
-            paper: { sx: { mt: 1 } },
-          }}
-        />
-      </Box>
+          color="inherit"
+          startIcon={<SwapHorizIcon />}
+          onClick={(e) => setGroupMenu(e.currentTarget)}
+          sx={{ color: "text.secondary", flexShrink: 0 }}
+        >
+          Switch group
+        </Button>
+      ) : null}
+      <Menu open={Boolean(groupMenu)} anchorEl={groupMenu} onClose={() => setGroupMenu(null)}>
+        {groups.map((option) => (
+          <MenuItem
+            key={option.id}
+            selected={option.id === Number(selectedGroupId)}
+            onClick={() => {
+              setGroupMenu(null);
+              void refresh(option.id);
+            }}
+          >
+            {option.name}
+          </MenuItem>
+        ))}
+      </Menu>
+      <Box flex={1} minWidth={0} />
       {selectedGroupId && !constitutionLocked && (
         <Chip size="small" label="Constitution not locked" color="warning" variant="outlined" />
       )}
@@ -270,20 +302,22 @@ export function AdminLayout({
 
   const actions = (
     <>
-      <Button
-        startIcon={<AddIcon />}
-        variant="contained"
-        onClick={openCreateGroup}
-        aria-label="New group"
-        sx={{ "& .MuiButton-startIcon": { mr: { xs: 0, sm: 1 } } }}
-      >
-        <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>
-          New group
-        </Box>
-      </Button>
+      {systemAdmin && (
+        <Button
+          startIcon={<AddIcon />}
+          variant="contained"
+          onClick={openCreateGroup}
+          aria-label="New group"
+          sx={{ "& .MuiButton-startIcon": { mr: { xs: 0, sm: 1 } } }}
+        >
+          <Box component="span" sx={{ display: { xs: "none", sm: "inline" } }}>
+            New group
+          </Box>
+        </Button>
+      )}
       <Button
         startIcon={<PersonAddAlt1Icon />}
-        variant="outlined"
+        variant={systemAdmin ? "outlined" : "contained"}
         disabled={!selectedGroupId}
         onClick={openInvite}
         aria-label="Add member"
@@ -339,8 +373,10 @@ export function AdminLayout({
     selectedGroupId,
     group,
     members,
+    memberships,
     contributions,
     dashboard,
+    performance,
     loans,
     requests,
     constitutionLocked,
@@ -355,7 +391,7 @@ export function AdminLayout({
   return (
     <AdminContext.Provider value={ctx}>
       <AppShell
-        title="Admin Console"
+        title={group?.name ?? "Admin Console"}
         user={currentUser}
         navItems={navItems}
         header={header}

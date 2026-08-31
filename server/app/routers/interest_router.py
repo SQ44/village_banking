@@ -8,11 +8,12 @@ from ..database import get_session
 from ..interest import apply_interest, calculate_interest
 from ..models import Account, InterestAccrual, Membership, Transaction, TransactionStatus, TransactionType
 from ..schemas import InterestApplyRequest, InterestPreview, TransactionRead
+from ..roles import is_platform_admin
 
 router = APIRouter(prefix="/interest", tags=["Interest"])
 
 def _is_platform_admin(role: str) -> bool:
-    return role in {"admin", "operator"}
+    return is_platform_admin(role)
 
 
 def _is_member_in_group(session: Session, *, group_id: int, user_id: int) -> bool:

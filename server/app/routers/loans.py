@@ -33,6 +33,7 @@ from ..models import (
 from ..group_finance import net_contributions_by_account, round_allocations
 from ..money import ZERO, money, percent_of, rate as as_rate
 from ..loan_service import create_loan_internal
+from ..roles import is_platform_admin
 from ..schemas import (
     LoanBoardItem,
     LoanCreate,
@@ -51,7 +52,7 @@ REPAY_ENDPOINT = "POST /loans/{loan_id}/repay"
 
 
 def _is_platform_admin(user: User) -> bool:
-    return user.role in {"admin", "operator"}
+    return is_platform_admin(user)
 
 
 def _get_membership(session: Session, *, group_id: int, user_id: int) -> Optional[Membership]:

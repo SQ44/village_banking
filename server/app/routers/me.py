@@ -24,6 +24,7 @@ from ..models import (
     TransactionType,
     User,
 )
+from ..roles import is_platform_admin
 from ..schemas import (
     AccountRead,
     GroupSettingsRead,
@@ -168,7 +169,7 @@ def my_forecast(
     if not account or not membership.group_id:
         return MemberForecast(group_id=None, my_net_contribution=0, group_total_contributions=0, my_share_percent=0, loans=[])
 
-    if membership.accepted_terms_at is None and current_user.role not in {"admin", "operator"}:
+    if membership.accepted_terms_at is None and not is_platform_admin(current_user):
         raise HTTPException(status_code=403, detail="Accept group terms first")
 
     contributions = net_contributions_by_account(session, group_id=membership.group_id)

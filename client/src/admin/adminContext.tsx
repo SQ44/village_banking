@@ -5,10 +5,12 @@ import type {
   DashboardStats,
   Group,
   GroupContributionItem,
+  GroupPerformance,
   GroupSettingsUpdatePayload,
   GroupWithSettings,
   Loan,
   LoanRequest,
+  Membership,
 } from "../types";
 
 export type AdminContextValue = {
@@ -17,8 +19,10 @@ export type AdminContextValue = {
   selectedGroupId: number | "";
   group: GroupWithSettings | null;
   members: Account[];
+  memberships: Membership[];
   contributions: GroupContributionItem[];
   dashboard: DashboardStats | null;
+  performance: GroupPerformance | null;
   loans: Loan[];
   requests: LoanRequest[];
   constitutionLocked: boolean;

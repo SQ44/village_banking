@@ -10,11 +10,12 @@ from ..database import get_session
 from ..models import Account, Transaction, TransactionStatus, TransactionType
 from ..schemas import AccountCreate, AccountRead, AccountUpdate, StatementLineRead
 from ..auth import get_current_active_user
+from ..roles import is_platform_admin
 
 router = APIRouter(prefix="/accounts", tags=["Accounts"])
 
 def _is_platform_admin(role: str) -> bool:
-    return role in {"admin", "operator"}
+    return is_platform_admin(role)
 
 
 @router.get("", response_model=List[AccountRead])
