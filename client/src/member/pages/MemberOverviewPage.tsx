@@ -1,19 +1,14 @@
 import { useEffect, useState } from "react";
-import {
-  Alert,
-  Box,
-  Card,
-  CardContent,
-  Grid,
-  InputAdornment,
-  LinearProgress,
-  Skeleton,
-  Stack,
-  TextField,
-  Typography,
-} from "@mui/material";
+import { Box, Grid, InputAdornment, LinearProgress, Stack, TextField, Typography } from "@mui/material";
+import AccountBalanceWalletIcon from "@mui/icons-material/AccountBalanceWallet";
+import CreditCardIcon from "@mui/icons-material/CreditCard";
+import GroupIcon from "@mui/icons-material/Group";
+import TrendingUpIcon from "@mui/icons-material/TrendingUp";
 
+import { Metric } from "../../components/Metric";
 import { PageHeader } from "../../components/PageHeader";
+import { Section } from "../../components/Section";
+import { StatCard } from "../../components/StatCard";
 import { currency, formatDate } from "../../lib/format";
 import { useMember } from "../memberContext";
 
@@ -38,6 +33,7 @@ export default function MemberOverviewPage() {
 
   if (!group) return null;
 
+  const loading = busy && !summary;
   const now = new Date();
   const cycleDays = Math.max(1, Number(group.settings?.withdrawal_cycle_days ?? 30));
 
@@ -117,175 +113,140 @@ export default function MemberOverviewPage() {
   const onTrack = projectedSavings + 1e-9 >= effectiveTarget;
 
   const progress = effectiveTarget > 0 ? Math.min(100, (currentSavings / effectiveTarget) * 100) : 0;
+  const activeLoanCount = (forecast?.loans ?? []).length;
   const expectedInterest = (forecast?.loans ?? []).reduce((sum, item) => sum + Number(item.my_expected_interest ?? 0), 0);
 
   return (
     <Box>
-      <PageHeader title="Overview" subtitle="Key dates for withdrawals and interest accrual in this cycle." />
-      <Grid container spacing={2} sx={{ mb: 2 }}>
-        <Grid item xs={12} md={6}>
-          <Alert severity="info">
-            Next withdrawal:{" "}
-            {busy && !summary ? (
-              <Skeleton width={140} sx={{ display: "inline-block" }} />
-            ) : summary?.next_withdrawal_at ? (
-              formatDate(summary.next_withdrawal_at)
-            ) : (
-              "Not scheduled"
-            )}
-          </Alert>
+      <PageHeader
+        title="Overview"
+        subtitle={
+          daysRemaining > 0
+            ? `${daysRemaining} ${daysRemaining === 1 ? "day" : "days"} left in this cycle.`
+            : "This cycle has reached its withdrawal date."
+        }
+      />
+
+      <Grid container spacing={2.5} sx={{ mb: 2.5 }}>
+        <Grid item xs={6} md={3}>
+          <StatCard
+            label="Savings"
+            value={currency(currentSavings)}
+            icon={<AccountBalanceWalletIcon />}
+            loading={loading}
+          />
         </Grid>
-        <Grid item xs={12} md={6}>
-          <Alert severity="info">
-            Next interest accrual:{" "}
-            {busy && !summary ? (
-              <Skeleton width={140} sx={{ display: "inline-block" }} />
-            ) : summary?.next_interest_accrual_at ? (
-              formatDate(summary.next_interest_accrual_at)
-            ) : (
-              "Not scheduled"
-            )}
-          </Alert>
+        <Grid item xs={6} md={3}>
+          <StatCard
+            label="Interest earned"
+            value={currency(Number(summary?.interest_earned ?? 0))}
+            icon={<TrendingUpIcon />}
+            loading={loading}
+          />
+        </Grid>
+        <Grid item xs={6} md={3}>
+          <StatCard
+            label="Outstanding loans"
+            value={currency(Number(summary?.loan_outstanding ?? 0))}
+            icon={<CreditCardIcon />}
+            loading={loading}
+          />
+        </Grid>
+        <Grid item xs={6} md={3}>
+          <StatCard
+            label="My share"
+            value={`${(forecast?.my_share_percent ?? 0).toFixed(2)}%`}
+            icon={<GroupIcon />}
+            loading={loading}
+          />
         </Grid>
       </Grid>
 
-      <Grid container spacing={2}>
+      <Grid container spacing={2.5} alignItems="flex-start">
         <Grid item xs={12} lg={7}>
-          <Card sx={{ height: "100%" }}>
-            <CardContent>
-              <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={2} mb={1}>
-                <Box minWidth={0}>
-                  <Typography variant="subtitle1" fontWeight={800}>
-                    Savings projection
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Projected balance by withdrawal date based on your current pace.
-                  </Typography>
-                </Box>
-                <Box textAlign="right" flexShrink={0}>
-                  <Typography variant="body2" color="text.secondary">
-                    Cycle ends
-                  </Typography>
-                  <Typography variant="body2" fontWeight={700}>
-                    {cycleEnd ? cycleEnd.toLocaleDateString() : "-"}
-                  </Typography>
-                </Box>
-              </Box>
-
-              <Grid container spacing={2} sx={{ mt: 0.5 }}>
-                <Grid item xs={12} sm={4}>
-                  <Typography variant="caption" color="text.secondary">
-                    Current savings
-                  </Typography>
-                  <Typography variant="h6">{busy && !summary ? "-" : currency(currentSavings)}</Typography>
-                </Grid>
-                <Grid item xs={12} sm={4}>
-                  <Typography variant="caption" color="text.secondary">
-                    Projected by cycle end
-                  </Typography>
-                  <Typography variant="h6">{busy && !summary ? "-" : currency(projectedSavings)}</Typography>
-                </Grid>
-                <Grid item xs={12} sm={4}>
-                  <Typography variant="caption" color="text.secondary">
-                    Avg net / day (cycle)
-                  </Typography>
-                  <Typography variant="h6">{busy && !summary ? "-" : currency(avgNetPerDay)}</Typography>
-                </Grid>
+          <Section title="Savings" subtitle="Where you land by the withdrawal date at your current pace.">
+            <Grid container spacing={2.5} sx={{ mb: 3 }}>
+              <Grid item xs={6} sm={4}>
+                <Metric label="Saved so far" value={currency(currentSavings)} loading={loading} size="lg" />
               </Grid>
+              <Grid item xs={6} sm={4}>
+                <Metric label="Projected" value={currency(projectedSavings)} loading={loading} size="lg" />
+              </Grid>
+              <Grid item xs={6} sm={4}>
+                <Metric label="Average per day" value={currency(avgNetPerDay)} loading={loading} size="lg" />
+              </Grid>
+            </Grid>
 
-              <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mt: 2 }}>
-                <TextField
-                  label="Target by cycle end"
-                  type="number"
-                  fullWidth
-                  value={target}
-                  onChange={(e) => setTarget(e.target.value === "" ? "" : Number(e.target.value))}
-                  disabled={!summary}
-                  InputProps={{
-                    startAdornment: <InputAdornment position="start">K</InputAdornment>,
-                  }}
-                  helperText={
-                    target === ""
-                      ? `Suggested: ${currency(suggestedTarget)} (based on pace + minimum contribution)`
-                      : onTrack
-                        ? "On track at current pace."
-                        : `Need about ${currency(requiredPerWeek)} / week to reach target.`
-                  }
-                />
-                <Box minWidth={{ sm: 220 }} flexShrink={0}>
-                  <Typography variant="caption" color="text.secondary">
-                    Progress
-                  </Typography>
-                  <Box display="flex" alignItems="center" gap={1} mt={0.5}>
-                    <Box flex={1}>
-                      <LinearProgress
-                        variant="determinate"
-                        value={busy && !summary ? 0 : progress}
-                        sx={{ height: 10, borderRadius: 999, backgroundColor: "rgba(15,23,42,0.08)" }}
-                      />
-                    </Box>
-                    <Typography variant="body2" fontWeight={700}>
-                      {busy && !summary ? "-" : `${Math.round(progress)}%`}
-                    </Typography>
-                  </Box>
-                  <Typography variant="body2" color={onTrack ? "success.main" : "text.secondary"} sx={{ mt: 1 }}>
-                    {busy && !summary
-                      ? "Calculating..."
-                      : onTrack
-                        ? "On track for your target."
-                        : daysRemaining > 0
-                          ? `Required pace: ${currency(requiredPerDay)} / day`
-                          : "Target requires additional savings."}
-                  </Typography>
-                </Box>
-              </Stack>
-
-              <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mt: 2 }}>
+            <Box mb={3}>
+              <Box display="flex" justifyContent="space-between" alignItems="baseline" mb={1}>
                 <Typography variant="body2" color="text.secondary">
-                  Deposits this cycle: {flow.depositCount} - Avg deposit:{" "}
-                  {flow.depositCount ? currency(flow.depositTotal / flow.depositCount) : "-"}
+                  {onTrack ? "On track for your target" : `Needs about ${currency(requiredPerWeek)} a week`}
                 </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Days remaining: {daysRemaining}
+                <Typography variant="body2" fontWeight={600} color={onTrack ? "success.main" : "text.primary"}>
+                  {loading ? "—" : `${Math.round(progress)}%`}
                 </Typography>
               </Box>
-            </CardContent>
-          </Card>
+              <LinearProgress
+                variant="determinate"
+                color={onTrack ? "success" : "primary"}
+                value={loading ? 0 : progress}
+              />
+            </Box>
+
+            <TextField
+              label="Target by cycle end"
+              type="number"
+              size="small"
+              fullWidth
+              value={target}
+              onChange={(e) => setTarget(e.target.value === "" ? "" : Number(e.target.value))}
+              disabled={!summary}
+              InputProps={{ startAdornment: <InputAdornment position="start">K</InputAdornment> }}
+              helperText={target === "" ? `Suggested: ${currency(suggestedTarget)}` : " "}
+            />
+          </Section>
         </Grid>
 
         <Grid item xs={12} lg={5}>
-          <Card sx={{ height: "100%" }}>
-            <CardContent>
-              <Typography variant="subtitle1" fontWeight={800} gutterBottom>
-                Interest outlook
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                Expected interest from current active loans, distributed by contribution share.
-              </Typography>
+          <Stack spacing={2.5} height="100%">
+            <Section title="Key dates" dense>
+              <Stack spacing={2}>
+                <Metric
+                  label="Next withdrawal"
+                  value={summary?.next_withdrawal_at ? formatDate(summary.next_withdrawal_at) : "Not scheduled"}
+                  loading={loading}
+                  size="sm"
+                />
+                <Metric
+                  label="Next interest accrual"
+                  value={
+                    summary?.next_interest_accrual_at ? formatDate(summary.next_interest_accrual_at) : "Not scheduled"
+                  }
+                  loading={loading}
+                  size="sm"
+                />
+                <Metric
+                  label="Deposits this cycle"
+                  value={
+                    flow.depositCount
+                      ? `${flow.depositCount} · avg ${currency(flow.depositTotal / flow.depositCount)}`
+                      : "None yet"
+                  }
+                  loading={loading}
+                  size="sm"
+                />
+              </Stack>
+            </Section>
 
-              <Grid container spacing={2}>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    My share
-                  </Typography>
-                  <Typography variant="h6">{(forecast?.my_share_percent ?? 0).toFixed(2)}%</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">
-                    Expected interest
-                  </Typography>
-                  <Typography variant="h6">{currency(expectedInterest)}</Typography>
-                </Grid>
-              </Grid>
-
-              <Box sx={{ mt: 2 }}>
-                <Typography variant="body2" color="text.secondary">
-                  Net contribution: {currency(Number(forecast?.my_net_contribution ?? 0))} - Group total:{" "}
-                  {currency(Number(forecast?.group_total_contributions ?? 0))}
-                </Typography>
-              </Box>
-            </CardContent>
-          </Card>
+            <Section title="Interest" subtitle="Your share of interest on the group's active loans." dense>
+              <Metric label="Expected this cycle" value={currency(expectedInterest)} loading={loading} size="lg" />
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                {activeLoanCount === 0
+                  ? "No active loans in the group yet."
+                  : `From ${activeLoanCount} active ${activeLoanCount === 1 ? "loan" : "loans"}.`}
+              </Typography>
+            </Section>
+          </Stack>
         </Grid>
       </Grid>
     </Box>
