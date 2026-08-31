@@ -13,6 +13,14 @@ export interface TokenResponse {
   token_type: string;
 }
 
+/** Platform roles. A group administrator runs one group and is deliberately
+ *  not a platform admin: their reach comes from membership, not from this. */
+export const PLATFORM_ADMIN_ROLES = ["admin", "operator"] as const;
+
+export function isSystemAdmin(user: Pick<User, "role"> | null | undefined): boolean {
+  return Boolean(user && (PLATFORM_ADMIN_ROLES as readonly string[]).includes(user.role));
+}
+
 export interface User {
   id: number;
   email: string;
@@ -92,6 +100,67 @@ export interface TransactionPayload {
   use_lipila?: boolean;
   channel?: PaymentChannel;
   phone_number?: string;
+}
+
+/** Ratios are null when there is nothing to divide by — a group with no loans
+ *  has no portfolio at risk, which is not the same as being at 0% risk. */
+export interface PortfolioPerformance {
+  outstanding_principal: number;
+  outstanding_interest: number;
+  active_loans: number;
+  closed_loans: number;
+  at_risk_amount: number;
+  at_risk_loans: number;
+  par_percent: number | null;
+  par_benchmark_percent: number | null;
+  par_benchmark_days: number;
+  arrears_amount: number;
+  settled_installments: number;
+  on_time_installments: number;
+  on_time_percent: number | null;
+}
+
+export interface LiquidityPerformance {
+  pool: number;
+  lent_out: number;
+  idle: number;
+  cap_percent: number;
+  cap_amount: number;
+  available_to_lend: number;
+  utilization_percent: number | null;
+  cap_used_percent: number | null;
+}
+
+export interface EarningsPerformance {
+  interest_earned: number;
+  admin_fees: number;
+  interest_accruing: number;
+  return_on_pool_percent: number | null;
+}
+
+export interface CyclePerformance {
+  cycle_days: number;
+  cycle_start: string;
+  deposits: number;
+  withdrawals: number;
+  net_savings: number;
+  previous_net_savings: number;
+  repayments_collected: number;
+  disbursed: number;
+  member_count: number;
+  contributing_members: number;
+  participation_percent: number | null;
+  open_requests: number;
+  open_request_amount: number;
+}
+
+export interface GroupPerformance {
+  group_id: number;
+  generated_at: string;
+  portfolio: PortfolioPerformance;
+  liquidity: LiquidityPerformance;
+  earnings: EarningsPerformance;
+  cycle: CyclePerformance;
 }
 
 export interface DashboardStats {

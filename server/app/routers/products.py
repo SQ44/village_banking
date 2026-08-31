@@ -7,11 +7,12 @@ from ..auth import get_current_active_user
 from ..database import get_session
 from ..models import SavingsProduct
 from ..schemas import SavingsProductCreate, SavingsProductRead
+from ..roles import is_platform_admin
 
 router = APIRouter(prefix="/products", tags=["Savings Products"])
 
 def _is_platform_admin(role: str) -> bool:
-    return role in {"admin", "operator"}
+    return is_platform_admin(role)
 
 
 @router.get("", response_model=List[SavingsProductRead])

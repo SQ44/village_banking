@@ -18,6 +18,8 @@ import {
 } from "@mui/material";
 import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
 import PaymentsIcon from "@mui/icons-material/Payments";
+import PersonRemoveIcon from "@mui/icons-material/PersonRemove";
+import ShieldIcon from "@mui/icons-material/Shield";
 import { DataGrid, GridToolbar, type GridColDef } from "@mui/x-data-grid";
 
 import { Api } from "../../api";
@@ -40,7 +42,7 @@ function amountDue(member: Account): number | null {
 }
 
 export default function AdminMembersPage() {
-  const { busy, members, openInvite, selectedGroupId, refresh } = useAdmin();
+  const { busy, members, memberships, openInvite, selectedGroupId, refresh } = useAdmin();
 
   const [target, setTarget] = useState<Account | null>(null);
   const [amount, setAmount] = useState(0);
@@ -50,6 +52,44 @@ export default function AdminMembersPage() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<string | null>(null);
+  // Which account the confirmation dialog is asking about, and where it is
+  // heading. Promotion is confirmed rather than done on the click: it hands
+  // somebody the run of the group, which is not an undoable nicety.
+  const [roleTarget, setRoleTarget] = useState<{ member: Account; makeAdmin: boolean } | null>(null);
+  const [savingRole, setSavingRole] = useState(false);
+
+  // Account id -> whether that member administers this group.
+  const adminAccountIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const m of memberships) {
+      if (m.role === "admin" && m.account_id) ids.add(Number(m.account_id));
+    }
+    return ids;
+  }, [memberships]);
+
+  const submitRole = async () => {
+    if (!roleTarget || !selectedGroupId) return;
+    setSavingRole(true);
+    setError(null);
+    try {
+      await Api.setMemberRole(
+        Number(selectedGroupId),
+        Number(roleTarget.member.id),
+        roleTarget.makeAdmin ? "admin" : "member"
+      );
+      setSent(
+        roleTarget.makeAdmin
+          ? `${roleTarget.member.name} can now administer this group.`
+          : `${roleTarget.member.name} is an ordinary member again.`
+      );
+      setRoleTarget(null);
+      await refresh(Number(selectedGroupId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to change the member's role");
+    } finally {
+      setSavingRole(false);
+    }
+  };
 
   const openCollect = (member: Account) => {
     setTarget(member);
@@ -77,19 +117,42 @@ export default function AdminMembersPage() {
         },
       },
       {
-        field: "actions",
-        headerName: "",
-        minWidth: 150,
+        field: "role",
+        headerName: "Role",
+        minWidth: 120,
         sortable: false,
         filterable: false,
-        renderCell: ({ row }) => (
-          <Button size="small" startIcon={<PaymentsIcon />} onClick={() => openCollect(row)}>
-            {amountDue(row) ? "Collect" : "Request"}
-          </Button>
-        ),
+        renderCell: ({ row }) =>
+          adminAccountIds.has(Number(row.id)) ? (
+            <Chip size="small" color="primary" variant="outlined" label="Group admin" />
+          ) : null,
+      },
+      {
+        field: "actions",
+        headerName: "",
+        minWidth: 260,
+        sortable: false,
+        filterable: false,
+        renderCell: ({ row }) => {
+          const isAdmin = adminAccountIds.has(Number(row.id));
+          return (
+            <Box display="flex" gap={0.5}>
+              <Button size="small" startIcon={<PaymentsIcon />} onClick={() => openCollect(row)}>
+                {amountDue(row) ? "Collect" : "Request"}
+              </Button>
+              <Button
+                size="small"
+                startIcon={isAdmin ? <PersonRemoveIcon /> : <ShieldIcon />}
+                onClick={() => setRoleTarget({ member: row, makeAdmin: !isAdmin })}
+              >
+                {isAdmin ? "Remove admin" : "Make admin"}
+              </Button>
+            </Box>
+          );
+        },
       },
     ],
-    []
+    [adminAccountIds]
   );
 
   const submit = async () => {
@@ -156,6 +219,28 @@ export default function AdminMembersPage() {
           slotProps={{ toolbar: { showQuickFilter: true, quickFilterProps: { debounceMs: 250 } } }}
         />
       </Box>
+
+      <Dialog open={Boolean(roleTarget)} onClose={() => setRoleTarget(null)} fullWidth maxWidth="xs">
+        <DialogTitle>{roleTarget?.makeAdmin ? "Make group admin" : "Remove group admin"}</DialogTitle>
+        <DialogContent>
+          {error && (
+            <Alert severity="error" sx={{ mt: 1 }} onClose={() => setError(null)}>
+              {error}
+            </Alert>
+          )}
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            {roleTarget?.makeAdmin
+              ? `${roleTarget?.member.name} will be able to invite members, set the constitution and see every loan in this group. They will not be able to see any other group.`
+              : `${roleTarget?.member.name} will go back to the member console and lose access to this group's administration.`}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRoleTarget(null)}>Cancel</Button>
+          <Button variant="contained" onClick={submitRole} disabled={savingRole}>
+            {roleTarget?.makeAdmin ? "Make admin" : "Remove admin"}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={Boolean(target)} onClose={() => setTarget(null)} fullWidth maxWidth="xs">
         <DialogTitle>Request contribution</DialogTitle>

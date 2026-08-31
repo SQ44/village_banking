@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from .. import audit, idempotency, journal
@@ -12,6 +13,7 @@ from ..database import get_session
 from ..group_finance import net_contributions_by_account
 from ..lipila import service as lipila
 from ..models import Account, Group, GroupSettings, Membership, MembershipRole, PaymentChannel, Transaction, TransactionStatus, TransactionType, User
+from ..roles import GROUP_ADMIN_ROLE, MEMBER_ROLE, is_platform_admin
 from ..schemas import (
     AcceptTermsRequest,
     AccountRead,
@@ -26,6 +28,7 @@ from ..schemas import (
     MemberInvite,
     MemberInviteResponse,
     MemberPayment,
+    MemberRoleUpdate,
     MembershipRead,
     UserCreate,
 )
@@ -38,7 +41,7 @@ COLLECT_ENDPOINT = "POST /groups/{group_id}/members/{account_id}/collect"
 
 
 def _is_platform_admin(user: User) -> bool:
-    return user.role in {"admin", "operator"}
+    return is_platform_admin(user)
 
 
 def _require_platform_admin(user: User) -> None:
@@ -182,6 +185,82 @@ def list_group_members(
         _require_group_admin(session, group_id=group_id, user=current_user)
     statement = select(Membership).where(Membership.group_id == group_id).order_by(Membership.joined_at.desc())
     return session.exec(statement).all()
+
+
+@router.post("/{group_id}/members/{account_id}/role", response_model=MembershipRead)
+def set_member_role(
+    group_id: int,
+    account_id: int,
+    payload: MemberRoleUpdate,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_active_user),
+) -> Membership:
+    """Promote a member to run this group, or hand the role back.
+
+    A group administrator is an ordinary platform user carrying
+    `MembershipRole.ADMIN` here, so promoting somebody grants them this group
+    and nothing else: every group-scoped endpoint still puts them through a
+    membership lookup. Their platform role moves in step, because that is what
+    decides which console they land in when they sign in.
+
+    Demoting the last administrator is refused. A group with nobody able to
+    approve a loan or collect a contribution is stuck in a way only a system
+    administrator could undo.
+    """
+    if not _is_platform_admin(current_user):
+        _require_group_admin(session, group_id=group_id, user=current_user)
+
+    membership = session.exec(
+        select(Membership).where(
+            Membership.group_id == group_id,
+            Membership.account_id == account_id,
+            Membership.is_active.is_(True),
+        )
+    ).first()
+    if not membership:
+        raise HTTPException(status_code=404, detail="Not a member of this group")
+
+    target = session.get(User, membership.user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Member account has no user")
+
+    if payload.role == membership.role:
+        return membership
+
+    if payload.role == MembershipRole.MEMBER:
+        remaining = session.exec(
+            select(func.count(Membership.id)).where(
+                Membership.group_id == group_id,
+                Membership.role == MembershipRole.ADMIN,
+                Membership.is_active.is_(True),
+                Membership.id != membership.id,
+            )
+        ).one()
+        if not remaining:
+            raise HTTPException(status_code=400, detail="A group must keep at least one administrator")
+
+    before = {"membership_role": membership.role.value, "user_role": target.role}
+    membership.role = payload.role
+
+    # A system administrator keeps their platform role: demoting them inside one
+    # group must not cost them the installation.
+    if not is_platform_admin(target):
+        target.role = GROUP_ADMIN_ROLE if payload.role == MembershipRole.ADMIN else MEMBER_ROLE
+        session.add(target)
+
+    session.add(membership)
+    audit.record(
+        session,
+        actor=current_user,
+        action="member.role_changed",
+        entity_type="membership",
+        entity_id=str(membership.id),
+        before=before,
+        after={"membership_role": membership.role.value, "user_role": target.role},
+    )
+    session.commit()
+    session.refresh(membership)
+    return membership
 
 
 @router.get("/{group_id}/accounts", response_model=List[AccountRead])

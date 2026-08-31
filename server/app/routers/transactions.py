@@ -23,6 +23,7 @@ from ..models import (
     TransactionType,
 )
 from ..schemas import TransactionCreate, TransactionRead, TransactionStatusUpdate
+from ..roles import is_platform_admin
 
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
 
@@ -31,7 +32,7 @@ router = APIRouter(prefix="/transactions", tags=["Transactions"])
 CREATE_ENDPOINT = "POST /transactions"
 
 def _is_platform_admin(role: str) -> bool:
-    return role in {"admin", "operator"}
+    return is_platform_admin(role)
 
 
 def _get_membership(session: Session, *, group_id: int, user_id: int) -> Membership | None:

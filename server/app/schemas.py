@@ -178,6 +178,71 @@ class DashboardStats(BaseModel):
     pending_transactions: int
 
 
+class PortfolioPerformance(BaseModel):
+    """Loan book quality. Ratios are None when there are no loans to divide by."""
+
+    outstanding_principal: Money
+    outstanding_interest: Money
+    active_loans: int
+    closed_loans: int
+    at_risk_amount: Money
+    at_risk_loans: int
+    par_percent: Optional[Rate] = None
+    par_benchmark_percent: Optional[Rate] = None
+    par_benchmark_days: int
+    arrears_amount: Money
+    settled_installments: int
+    on_time_installments: int
+    on_time_percent: Optional[Rate] = None
+
+
+class LiquidityPerformance(BaseModel):
+    """Whether the pool's money is working, and whether it is working too hard."""
+
+    pool: Money
+    lent_out: Money
+    idle: Money
+    cap_percent: Rate
+    cap_amount: Money
+    available_to_lend: Money
+    utilization_percent: Optional[Rate] = None
+    cap_used_percent: Optional[Rate] = None
+
+
+class EarningsPerformance(BaseModel):
+    interest_earned: Money
+    admin_fees: Money
+    interest_accruing: Money
+    return_on_pool_percent: Optional[Rate] = None
+
+
+class CyclePerformance(BaseModel):
+    """Movement inside the current withdrawal cycle, with the last one alongside."""
+
+    cycle_days: int
+    cycle_start: datetime
+    deposits: Money
+    withdrawals: Money
+    net_savings: Money
+    previous_net_savings: Money
+    repayments_collected: Money
+    disbursed: Money
+    member_count: int
+    contributing_members: int
+    participation_percent: Optional[Rate] = None
+    open_requests: int
+    open_request_amount: Money
+
+
+class GroupPerformance(BaseModel):
+    group_id: int
+    generated_at: datetime
+    portfolio: PortfolioPerformance
+    liquidity: LiquidityPerformance
+    earnings: EarningsPerformance
+    cycle: CyclePerformance
+
+
 class GroupCreate(SQLModel):
     name: str
     terms: str = ""
@@ -302,6 +367,12 @@ class MembershipRead(SQLModel):
     accepted_terms_at: Optional[datetime]
     joined_at: datetime
     is_active: bool
+
+
+class MemberRoleUpdate(SQLModel):
+    """Who runs the group. `admin` promotes, `member` hands the role back."""
+
+    role: MembershipRole
 
 
 class AcceptTermsRequest(SQLModel):

@@ -19,7 +19,7 @@ export function Metric({
 
   return (
     <Box minWidth={0}>
-      <Typography variant="overline" color="text.secondary" display="block" noWrap>
+      <Typography variant="overline" color="text.secondary" display="block">
         {label}
       </Typography>
       {loading ? (

@@ -13,6 +13,7 @@ import type {
   GroupSettingsUpdatePayload,
   GroupWithSettings,
   GroupContributionItem,
+  GroupPerformance,
   InterestPreview,
   InterestRequest,
   Loan,
@@ -30,6 +31,7 @@ import type {
   MemberForecast,
   MemberSummary,
   Membership,
+  MembershipRole,
   SavingsProduct,
   TokenResponse,
   Transaction,
@@ -156,6 +158,9 @@ export const Api = {
     request<SavingsProduct>("/products", { method: "POST", body: JSON.stringify(payload) }),
   getDashboard: () => request<DashboardStats>("/dashboard/summary"),
   getDashboardForGroup: (groupId: number) => request<DashboardStats>(`/dashboard/summary?group_id=${groupId}`),
+  /** How the group is doing rather than what it holds: portfolio quality,
+   *  liquidity, earnings and cycle movement, computed server-side. */
+  getGroupPerformance: (groupId: number) => request<GroupPerformance>(`/dashboard/performance?group_id=${groupId}`),
   previewInterest: (payload: InterestRequest) =>
     request<InterestPreview>("/interest/preview", { method: "POST", body: JSON.stringify(payload) }),
   applyInterest: (payload: InterestRequest) =>
@@ -191,6 +196,12 @@ export const Api = {
         headers: { "Idempotency-Key": idempotencyKey },
       })
     ),
+  /** Promote a member to run this group, or hand the role back. */
+  setMemberRole: (groupId: number, accountId: number, role: MembershipRole) =>
+    request<Membership>(`/groups/${groupId}/members/${accountId}/role`, {
+      method: "POST",
+      body: JSON.stringify({ role }),
+    }),
   acceptGroupTerms: (groupId: number) =>
     request<Membership>(`/groups/${groupId}/accept-terms`, { method: "POST", body: JSON.stringify({ accepted: true }) }),
   getGroupAccounts: (groupId: number) => request<Account[]>(`/groups/${groupId}/accounts`),

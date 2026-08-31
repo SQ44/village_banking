@@ -37,6 +37,7 @@ from ..schemas import (
     TrialBalanceRow,
 )
 from ..money import ZERO, from_minor, money
+from ..roles import is_platform_admin
 
 router = APIRouter(prefix="/operations", tags=["Operations"])
 
@@ -48,7 +49,7 @@ STUCK_PAYMENT_AGE = timedelta(minutes=15)
 
 
 def _require_admin(user: User) -> None:
-    if user.role not in {"admin", "operator"}:
+    if not is_platform_admin(user):
         raise HTTPException(status_code=403, detail="Admins only")
 
 
