@@ -7,6 +7,7 @@ the split of a pot never loses a ngwee", this file is the answer.
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal, InvalidOperation
 
 import pytest
@@ -48,22 +49,35 @@ class TestTwoDecimalPlaces:
     def test_the_answer_does_not_depend_on_how_you_add(self):
         """Two years of ordinary contributions, added two reasonable ways.
 
-        In float they disagree: `sum()` gives 7784.76, while the running
-        `balance += amount` the ledger actually used gives 7784.760000000002.
-        Neither is wrong as floating point goes — which is the problem. A
-        member's savings cannot depend on the order the entries were applied.
+        The running `balance += amount` the ledger used to keep lands on
+        7784.760000000002. Adding the very same amounts with exact rounding
+        lands on 7784.76. Neither is wrong as floating point goes — which is
+        the problem: what a member has saved cannot depend on which summation
+        the code happened to use.
+
+        The contrast is drawn against `math.fsum` rather than the builtin
+        `sum`, because `sum` is not a fixed target. Up to Python 3.11 it was
+        the naive left-to-right loop and so agreed with the running total
+        exactly; from 3.12 it uses Neumaier compensation and stopped agreeing.
+        A test pinning a money rule must not quietly depend on which of those
+        it is running under.
         """
         amounts = [350.10, 350.10, 275.35, 420.55, 199.99, 350.10] * 4
 
         running = 0.0
         for amount in amounts:
             running += amount
-        assert sum(amounts) != running  # float: two answers
 
+        # Float: the ledger's own running total, and the true one, disagree.
+        assert running == 7784.760000000002
+        assert math.fsum(amounts) == 7784.76
+        assert running != math.fsum(amounts)
+
+        # Decimal: one answer, arrived at the same way, and it is the right one.
         decimal_running = ZERO
         for amount in amounts:
             decimal_running += money(amount)
-        assert total(amounts) == decimal_running == Decimal("7784.76")  # one answer
+        assert total(amounts) == decimal_running == Decimal("7784.76")
 
     @pytest.mark.parametrize("bad", [None, "abc", "", object()])
     def test_nonsense_is_refused_rather_than_guessed_at(self, bad):
