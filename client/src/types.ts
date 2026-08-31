@@ -429,6 +429,8 @@ export interface TrialBalanceReport {
   balanced: boolean;
   /** Books and member balances agree. False means money moved with no entry. */
   control_total_matches: boolean;
+  /** Principal still with borrowers, read from the loans themselves. */
+  loans_outstanding: number;
   generated_at: string;
 }
 

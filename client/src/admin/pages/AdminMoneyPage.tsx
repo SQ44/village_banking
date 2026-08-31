@@ -65,7 +65,9 @@ export default function AdminMoneyPage() {
   const owed = Number(find("member_savings"));
   const held = Number(find("lipila_settlement")) + Number(find("cash_on_hand"));
   const fees = Number(find("provider_fees"));
-  const onLoan = Number(find("loans_receivable"));
+  // From the loans, not the journal: a borrower draws on their own savings,
+  // so no receivable is booked and the loans are the only truth.
+  const onLoan = Number(report?.loans_outstanding ?? 0);
 
   // Rows are one line per side, so both halves of an entry are visible together.
   const rows = entries.flatMap((entry) =>

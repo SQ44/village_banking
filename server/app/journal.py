@@ -65,6 +65,17 @@ class StatementLine:
     running_balance: Decimal
 
 
+def _is_loan_interest(transaction: Transaction) -> bool:
+    """Is this charge the interest half of a loan repayment?
+
+    The loan router tags it when it splits a repayment. Both the tag and the
+    loan reference are required: a bare `component` on some unrelated charge
+    should not be read as lending income.
+    """
+    fields = transaction.custom_fields or {}
+    return fields.get("component") == "interest" and fields.get("loan_id") is not None
+
+
 def _where_the_money_sits(transaction: Transaction) -> str:
     """Which asset account this transaction's cash moved through.
 
@@ -129,13 +140,14 @@ def post_transaction(
             # Interest paid to a saver costs the group; no cash moves.
             lines.append((INTEREST_EXPENSE, gross, ZERO))
         elif transaction.type == TransactionType.LOAN_REPAYMENT:
-            # The cash arrives and the debt shrinks. Splitting principal from
-            # interest needs the loan, which this layer does not have, so the
-            # whole repayment reduces the receivable for now.
+            # The principal half of a repayment. The borrower's own savings
+            # funded the loan, so paying it back restores them — the group is no
+            # better off for being handed back what it lent, and no income
+            # arises here. The gain is the interest, booked separately below.
             lines.append((asset, gross - fee, ZERO))
             if fee > ZERO:
                 lines.append((PROVIDER_FEES, fee, ZERO))
-            lines.append((LOANS_RECEIVABLE, ZERO, gross))
+            lines.append((MEMBER_SAVINGS, ZERO, gross))
             return _finish(session, entry, lines, account, transaction)
         else:
             lines.append((asset, gross - fee, ZERO))
@@ -147,13 +159,27 @@ def post_transaction(
     # Money leaving a member's balance.
     lines.append((MEMBER_SAVINGS, gross, ZERO))
     if transaction.type == TransactionType.FEE:
-        # Charged by the group, so it stays with the group.
-        lines.append((FEE_INCOME, ZERO, gross))
+        # The loan router books the interest half of a repayment as a charge
+        # against savings, tagging it. Interest earned by lending is what makes
+        # the pot grow and is what members meet to hear; filing it under service
+        # charges would bury the one number the group cares about.
+        if _is_loan_interest(transaction):
+            lines.append((INTEREST_INCOME, ZERO, gross))
+        else:
+            lines.append((FEE_INCOME, ZERO, gross))
     elif transaction.type == TransactionType.LOAN_DISBURSEMENT:
-        # Mirrors what the lending code does today: the borrower's own savings
-        # fund the loan. That conflates saving with borrowing, and is flagged
-        # rather than corrected here — changing it is a lending decision.
-        lines.append((LOANS_RECEIVABLE, ZERO, gross))
+        # The lending code draws the principal from the borrower's own savings,
+        # so no money is put at risk by the group and no receivable arises —
+        # economically this is a withdrawal, and booking it as one is the only
+        # way the entry stays true. What is actually still owed lives on the
+        # loan itself, which is where `loans_outstanding` reads it from.
+        #
+        # That the borrower funds their own loan conflates saving with
+        # borrowing. It is recorded as it stands rather than corrected here;
+        # changing it is a lending decision.
+        if fee > ZERO:
+            lines.append((PROVIDER_FEES, fee, ZERO))
+        lines.append((asset, ZERO, gross + fee))
     else:
         # A withdrawal. The member receives the full amount; the group pays the
         # provider's charge on top.

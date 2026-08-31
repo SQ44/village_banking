@@ -23,7 +23,7 @@ from sqlmodel import Session, select
 from .. import audit, journal
 from ..auth import get_current_active_user
 from ..database import get_session
-from ..models import Account, JournalEntry, JournalLine, ProviderEvent, Transaction, TransactionStatus, User
+from ..models import Account, JournalEntry, JournalLine, Loan, LoanStatus, ProviderEvent, Transaction, TransactionStatus, User
 from ..reconciliation import check_all
 from ..schemas import (
     AttentionReport,
@@ -36,7 +36,7 @@ from ..schemas import (
     TrialBalanceReport,
     TrialBalanceRow,
 )
-from ..money import from_minor
+from ..money import ZERO, from_minor, money
 
 router = APIRouter(prefix="/operations", tags=["Operations"])
 
@@ -208,7 +208,17 @@ def trial_balance(
     _require_admin(current_user)
 
     balances = journal.trial_balance(session, group_id=group_id)
+
+    loan_filter = select(Loan).where(Loan.status == LoanStatus.ACTIVE)
+    if group_id is not None:
+        loan_filter = loan_filter.where(Loan.group_id == group_id)
+    outstanding = sum(
+        (money(loan.outstanding_principal) for loan in session.exec(loan_filter).all()),
+        ZERO,
+    )
+
     return TrialBalanceReport(
+        loans_outstanding=outstanding,
         accounts=[
             TrialBalanceRow(account_code=code, balance=balance)
             for code, balance in sorted(balances.items())

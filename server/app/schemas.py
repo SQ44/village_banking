@@ -529,6 +529,10 @@ class TrialBalanceReport(SQLModel):
     balanced: bool = True
     # What the books say members are owed equals what their accounts say.
     control_total_matches: bool = True
+    # Principal still with borrowers. Read from the loans rather than the
+    # journal: under the current lending model a borrower draws on their own
+    # savings, so no receivable is booked and the loans are the only truth.
+    loans_outstanding: Decimal = Decimal("0.00")
     generated_at: datetime
 
 

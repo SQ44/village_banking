@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlmodel import Session, select
 from sqlalchemy import func
 
-from .. import idempotency
+from .. import idempotency, journal
 from ..autonomous_lending import auto_decide_and_apply, process_queued_requests
 from ..auth import get_current_active_user
 from ..database import get_session
@@ -365,6 +365,11 @@ def _repay_loan(
     description = payload.description or f"Loan repayment (loan {loan.id})"
     now = datetime.utcnow()
 
+    # Either half can be zero — a repayment covering only interest writes no
+    # principal row, and vice versa.
+    tx_principal: Optional[Transaction] = None
+    tx_interest: Optional[Transaction] = None
+
     if principal_paid > ZERO:
         tx_principal = Transaction(
             account_id=borrower.id,
@@ -409,6 +414,13 @@ def _repay_loan(
     # interest it distributes to the other members all have to land together. A
     # commit here would let a crash further down leave the loan reduced with the
     # members' share of the interest never paid.
+    session.flush()
+
+    # Book both halves. Inside the same event, so the books cannot record the
+    # principal without the interest that came with it.
+    for booked in (tx_principal, tx_interest):
+        if booked is not None:
+            journal.post_transaction(session, booked, borrower)
     session.flush()
 
     # Apply installment payments (best-effort, sequential).
