@@ -38,7 +38,7 @@ export type NavItem = {
   onClick?: () => void;
 };
 
-const drawerWidth = 280;
+const drawerWidth = 264;
 
 function initials(text: string) {
   const parts = text.trim().split(/\s+/).filter(Boolean);
@@ -71,11 +71,6 @@ export function AppShell({
   const theme = useTheme();
   const location = useLocation();
   const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
-  const isDark = theme.palette.mode === "dark";
-  const topBarText = isDark ? "rgba(226,232,240,0.96)" : "text.primary";
-  const topBarIcon = isDark ? "rgba(226,232,240,0.92)" : "text.primary";
-  const outlinedBorder = isDark ? "rgba(148,163,184,0.6)" : "rgba(37,99,235,0.35)";
-  const outlinedHover = isDark ? "rgba(148,163,184,0.12)" : "rgba(37,99,235,0.06)";
   const [mobileOpen, setMobileOpen] = useState(false);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
 
@@ -86,15 +81,17 @@ export function AppShell({
 
   const drawer = (
     <Box height="100%" display="flex" flexDirection="column">
-      <Box px={2} py={2}>
-        <Typography variant="h6">{title}</Typography>
-        <Typography variant="body2" color="text.secondary">
-          {user.full_name ?? user.email} · {user.role}
+      <Box px={2.5} py={2.25}>
+        <Typography variant="subtitle1" noWrap>
+          {title}
+        </Typography>
+        <Typography variant="body2" color="text.secondary" noWrap>
+          {user.full_name ?? user.email}
         </Typography>
       </Box>
       <Divider />
       <Box flex={1} overflow="auto" py={1}>
-        <List sx={{ px: 1 }}>
+        <List sx={{ px: 1.25 }} disablePadding>
           {navItems.map((item) => {
             // An action item is a plain button: it has nowhere to navigate to,
             // and must never render as a link or claim the selected state.
@@ -105,18 +102,15 @@ export function AppShell({
                 selected={!isAction && selectedPrefix === item.to}
                 disabled={item.disabled}
                 sx={{
-                  borderRadius: 2,
-                  mb: 0.5,
-                  transition: "background 160ms ease, border-color 160ms ease, transform 160ms ease",
-                  "&:hover": { transform: "translateY(-1px)" },
+                  borderRadius: 1.5,
+                  mb: 0.25,
+                  py: 0.85,
+                  color: "text.secondary",
+                  "& .MuiListItemIcon-root": { color: "inherit" },
                   "&.Mui-selected": {
-                    background:
-                      "linear-gradient(90deg, rgba(37,99,235,0.16) 0%, rgba(124,58,237,0.10) 100%)",
-                    border: "1px solid rgba(37,99,235,0.18)",
-                    "&:hover": {
-                      background:
-                        "linear-gradient(90deg, rgba(37,99,235,0.20) 0%, rgba(124,58,237,0.12) 100%)",
-                    },
+                    backgroundColor: "action.selected",
+                    color: "text.primary",
+                    "&:hover": { backgroundColor: "action.selected" },
                   },
                 }}
                 onClick={() => {
@@ -124,8 +118,9 @@ export function AppShell({
                   item.onClick?.();
                 }}
               >
-                <ListItemIcon sx={{ minWidth: 40 }}>{item.icon}</ListItemIcon>
+                <ListItemIcon sx={{ minWidth: 34, "& svg": { fontSize: 20 } }}>{item.icon}</ListItemIcon>
                 <ListItemText
+                  primaryTypographyProps={{ fontSize: "0.875rem", fontWeight: 550 }}
                   primary={
                     <Box display="flex" alignItems="center" justifyContent="space-between" gap={1}>
                       <span>{item.label}</span>
@@ -133,7 +128,7 @@ export function AppShell({
                         <Badge
                           color="primary"
                           badgeContent={item.badge}
-                          sx={{ "& .MuiBadge-badge": { borderRadius: 999 } }}
+                          sx={{ "& .MuiBadge-badge": { borderRadius: 999, position: "static", transform: "none" } }}
                         />
                       )}
                     </Box>
@@ -146,19 +141,15 @@ export function AppShell({
         </List>
       </Box>
       <Divider />
-      <Box px={1} py={1}>
+      <Box px={1.25} py={1}>
         <ListItemButton
           onClick={onLogout}
-          sx={{
-            borderRadius: 2,
-            color: theme.palette.error.main,
-            "&:hover": { backgroundColor: "rgba(239, 68, 68, 0.06)" },
-          }}
+          sx={{ borderRadius: 1.5, py: 0.85, color: "text.secondary" }}
         >
-          <ListItemIcon sx={{ minWidth: 40, color: theme.palette.error.main }}>
+          <ListItemIcon sx={{ minWidth: 34, color: "inherit", "& svg": { fontSize: 20 } }}>
             <LogoutIcon />
           </ListItemIcon>
-          <ListItemText primary="Logout" />
+          <ListItemText primaryTypographyProps={{ fontSize: "0.875rem", fontWeight: 550 }} primary="Logout" />
         </ListItemButton>
       </Box>
     </Box>
@@ -178,28 +169,12 @@ export function AppShell({
       >
         <Toolbar
           sx={{
-            minHeight: { xs: 64, md: 72 },
-            py: 1,
+            minHeight: { xs: 60, md: 64 },
+            gap: 1,
+            backgroundColor: "background.paper",
             borderBottom: "1px solid",
             borderColor: "divider",
-            backdropFilter: "blur(12px)",
-            color: topBarText,
-            background: isDark
-              ? "linear-gradient(90deg, rgba(15,23,42,0.96) 0%, rgba(30,41,59,0.88) 55%, rgba(15,23,42,0.96) 100%)"
-              : "linear-gradient(90deg, rgba(37,99,235,0.06) 0%, rgba(124,58,237,0.05) 45%, rgba(255,255,255,0.55) 100%)",
-            "& .MuiIconButton-root": { color: topBarIcon },
-            "& .MuiButton-root": { color: topBarText },
-            "& .MuiButton-contained": {
-              color: "common.white",
-            },
-            "& .MuiButton-outlined": {
-              borderColor: outlinedBorder,
-              color: topBarText,
-            },
-            "& .MuiButton-outlined:hover": {
-              backgroundColor: outlinedHover,
-              borderColor: outlinedBorder,
-            },
+            color: "text.primary",
           }}
         >
           {!isDesktop && (
@@ -214,14 +189,14 @@ export function AppShell({
             {actions}
             {onToggleColorMode ? (
               <Tooltip title={colorMode === "dark" ? "Switch to light mode" : "Switch to dark mode"}>
-                <IconButton onClick={onToggleColorMode} aria-label="toggle color mode">
-                  {colorMode === "dark" ? <LightModeIcon /> : <DarkModeIcon />}
+                <IconButton onClick={onToggleColorMode} aria-label="toggle color mode" size="small">
+                  {colorMode === "dark" ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
                 </IconButton>
               </Tooltip>
             ) : null}
             <Tooltip title="Account">
-              <IconButton onClick={(e) => setAnchor(e.currentTarget)} aria-label="account menu">
-                <Avatar sx={{ width: 34, height: 34, bgcolor: "primary.main" }}>
+              <IconButton onClick={(e) => setAnchor(e.currentTarget)} aria-label="account menu" size="small">
+                <Avatar sx={{ width: 30, height: 30, fontSize: "0.75rem", bgcolor: "primary.main" }}>
                   {initials(user.full_name ?? user.email)}
                 </Avatar>
               </IconButton>
@@ -247,21 +222,33 @@ export function AppShell({
             open={mobileOpen}
             onClose={() => setMobileOpen(false)}
             ModalProps={{ keepMounted: true }}
-            sx={{ "& .MuiDrawer-paper": { width: drawerWidth } }}
+            sx={{ "& .MuiDrawer-paper": { width: drawerWidth, backgroundColor: "background.paper" } }}
           >
             {drawer}
           </Drawer>
         )}
         {isDesktop && (
-          <Drawer variant="permanent" open sx={{ "& .MuiDrawer-paper": { width: drawerWidth, boxSizing: "border-box" } }}>
+          <Drawer
+            variant="permanent"
+            open
+            sx={{
+              "& .MuiDrawer-paper": {
+                width: drawerWidth,
+                boxSizing: "border-box",
+                backgroundColor: "background.paper",
+                borderRight: "1px solid",
+                borderColor: "divider",
+              },
+            }}
+          >
             {drawer}
           </Drawer>
         )}
       </Box>
 
-      <Box component="main" sx={{ flexGrow: 1, width: { md: `calc(100% - ${drawerWidth}px)` } }}>
-        <Toolbar sx={{ minHeight: { xs: 64, md: 72 } }} />
-        <Box px={{ xs: 2, md: 3 }} py={{ xs: 2, md: 3 }}>
+      <Box component="main" sx={{ flexGrow: 1, width: { md: `calc(100% - ${drawerWidth}px)` }, minWidth: 0 }}>
+        <Toolbar sx={{ minHeight: { xs: 60, md: 64 } }} />
+        <Box px={{ xs: 2, md: 3.5 }} py={{ xs: 2.5, md: 3.5 }} maxWidth={1360} mx="auto">
           {children}
         </Box>
       </Box>

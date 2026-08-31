@@ -10,7 +10,7 @@ export function PageHeader({
   action?: React.ReactNode;
 }) {
   return (
-    <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={2} mb={2}>
+    <Box display="flex" justifyContent="space-between" alignItems="flex-start" gap={2} mb={2.5}>
       <Box minWidth={0}>
         <Typography variant="h6">{title}</Typography>
         {subtitle && (
@@ -23,4 +23,3 @@ export function PageHeader({
     </Box>
   );
 }
-

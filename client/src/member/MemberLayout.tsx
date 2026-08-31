@@ -24,8 +24,6 @@ import ChecklistIcon from "@mui/icons-material/Checklist";
 
 import { Api } from "../api";
 import { AppShell, type NavItem } from "../layout/AppShell";
-import { StatCard } from "../components/StatCard";
-import { currency } from "../lib/format";
 import { useColorMode } from "../colorMode";
 import { MemberContext, type MemberContextValue } from "./memberContext";
 import type {
@@ -246,27 +244,6 @@ export function MemberLayout({
                 {group.terms || "No terms configured."}
               </Alert>
             )}
-
-            {!constitutionLocked && (
-              <Alert severity="info" sx={{ mb: 2 }}>
-                Loan requests open after the group locks the constitution for this cycle.
-              </Alert>
-            )}
-
-            <Grid container spacing={2} sx={{ mb: 2 }}>
-              <Grid item xs={12} md={3}>
-                <StatCard label="Savings" value={currency(Number(summary?.savings_balance ?? 0))} icon={<DashboardIcon color="action" />} loading={busy} />
-              </Grid>
-              <Grid item xs={12} md={3}>
-                <StatCard label="Interest earned" value={currency(Number(summary?.interest_earned ?? 0))} icon={<DashboardIcon color="action" />} loading={busy} />
-              </Grid>
-              <Grid item xs={12} md={3}>
-                <StatCard label="Outstanding loans" value={currency(Number(summary?.loan_outstanding ?? 0))} icon={<CreditCardIcon color="action" />} loading={busy} />
-              </Grid>
-              <Grid item xs={12} md={3}>
-                <StatCard label="My share (%)" value={`${(forecast?.my_share_percent ?? 0).toFixed(2)}%`} icon={<GroupIcon color="action" />} loading={busy} />
-              </Grid>
-            </Grid>
 
             <Outlet />
           </>

@@ -5,49 +5,82 @@ import { DataGridNoResultsOverlay, DataGridNoRowsOverlay } from "./components/Da
 
 export type ColorMode = "light" | "dark";
 
+/**
+ * One flat surface, one border colour, one accent. Decoration is deliberately
+ * absent: gradients, drop shadows and hover lifts were competing with the
+ * numbers on the dashboard, which are the only thing on screen that matters.
+ */
+const tokens = {
+  light: {
+    canvas: "#f5f6f8",
+    surface: "#ffffff",
+    surfaceMuted: "#fafbfc",
+    border: "rgba(15,23,42,0.09)",
+    textPrimary: "#0f172a",
+    textSecondary: "#5b6573",
+  },
+  dark: {
+    canvas: "#0b1120",
+    surface: "#111a2b",
+    surfaceMuted: "#0e1626",
+    border: "rgba(148,163,184,0.16)",
+    textPrimary: "#e8ebf0",
+    textSecondary: "rgba(232,235,240,0.62)",
+  },
+} as const;
+
 export function createAppTheme(mode: ColorMode) {
   const isDark = mode === "dark";
+  const t = isDark ? tokens.dark : tokens.light;
 
   return createTheme({
     palette: {
       mode,
-      primary: { main: "#2563eb" },
+      primary: { main: isDark ? "#60a5fa" : "#2563eb" },
       secondary: { main: "#7c3aed" },
       background: {
-        default: isDark ? "#0b1220" : "#f6f7fb",
-        paper: isDark ? "#0f172a" : "#ffffff",
+        default: t.canvas,
+        paper: t.surface,
       },
       text: {
-        primary: isDark ? "#e5e7eb" : "#0f172a",
-        secondary: isDark ? "rgba(229,231,235,0.72)" : "rgba(15,23,42,0.7)",
+        primary: t.textPrimary,
+        secondary: t.textSecondary,
       },
-      divider: isDark ? "rgba(148,163,184,0.18)" : "rgba(15,23,42,0.08)",
+      divider: t.border,
     },
     shape: {
-      borderRadius: 12,
+      borderRadius: 10,
     },
     typography: {
       fontFamily: ['"Inter"', "system-ui", "-apple-system", '"Segoe UI"', "Roboto", "Arial", "sans-serif"].join(","),
-      h5: { fontWeight: 700 },
-      h6: { fontWeight: 700 },
+      h5: { fontWeight: 650, letterSpacing: "-0.01em" },
+      h6: { fontWeight: 650, letterSpacing: "-0.01em" },
+      subtitle1: { fontWeight: 600, fontSize: "0.9375rem" },
+      subtitle2: { fontWeight: 600 },
+      // Section eyebrows and metric labels. Small, wide, quiet — they should
+      // read as furniture, not as content.
+      overline: {
+        fontWeight: 600,
+        fontSize: "0.6875rem",
+        letterSpacing: "0.07em",
+        lineHeight: 1.6,
+      },
+      button: { fontWeight: 550 },
     },
     components: {
       MuiCssBaseline: {
         styleOverrides: {
-          "html, body": {
-            height: "100%",
-          },
+          "html, body": { height: "100%" },
           body: {
             margin: 0,
             colorScheme: mode,
-            background: isDark
-              ? "radial-gradient(1000px 520px at 20% 0%, rgba(37, 99, 235, 0.16), transparent 60%), radial-gradient(800px 520px at 80% 10%, rgba(124, 58, 237, 0.14), transparent 55%), #0b1220"
-              : "radial-gradient(900px 480px at 20% 0%, rgba(37, 99, 235, 0.10), transparent 60%), radial-gradient(700px 420px at 80% 10%, rgba(124, 58, 237, 0.09), transparent 55%), #f6f7fb",
+            backgroundColor: t.canvas,
             WebkitFontSmoothing: "antialiased",
             MozOsxFontSmoothing: "grayscale",
           },
           "*:focus-visible": {
-            outline: "3px solid rgba(37,99,235,0.55)",
+            outline: "2px solid",
+            outlineColor: isDark ? "#60a5fa" : "#2563eb",
             outlineOffset: 2,
           },
         },
@@ -55,40 +88,47 @@ export function createAppTheme(mode: ColorMode) {
       MuiButton: {
         defaultProps: { disableElevation: true },
         styleOverrides: {
-          root: {
-            textTransform: "none",
-            fontWeight: 600,
-            transition: "transform 140ms ease, box-shadow 140ms ease, background-color 140ms ease",
-            "&:hover": { transform: "translateY(-1px)" },
-            "&.Mui-disabled": { transform: "none" },
-          },
+          root: { textTransform: "none" },
         },
       },
-      MuiIconButton: {
+      MuiChip: {
         styleOverrides: {
-          root: {
-            transition: "transform 140ms ease, background-color 140ms ease",
-            "&:hover": { transform: "translateY(-1px)" },
-            "&.Mui-disabled": { transform: "none" },
-          },
+          root: { fontWeight: 550 },
         },
       },
       MuiCard: {
+        defaultProps: { elevation: 0 },
         styleOverrides: {
           root: {
-            border: isDark ? "1px solid rgba(148,163,184,0.18)" : "1px solid rgba(15, 23, 42, 0.08)",
-            boxShadow: isDark ? "0 1px 2px rgba(0,0,0,0.35)" : "0 1px 2px rgba(15, 23, 42, 0.06)",
-            transition: "transform 160ms ease, box-shadow 160ms ease",
-            "&:hover": {
-              transform: "translateY(-1px)",
-              boxShadow: isDark ? "0 10px 24px rgba(0,0,0,0.45)" : "0 10px 24px rgba(15,23,42,0.10)",
-            },
+            border: `1px solid ${t.border}`,
+            boxShadow: "none",
+            backgroundImage: "none",
           },
+        },
+      },
+      MuiPaper: {
+        styleOverrides: {
+          root: { backgroundImage: "none" },
+        },
+      },
+      MuiAlert: {
+        styleOverrides: {
+          root: { border: `1px solid ${t.border}` },
         },
       },
       MuiDialog: {
         styleOverrides: {
-          paper: { border: isDark ? "1px solid rgba(148,163,184,0.20)" : "1px solid rgba(15, 23, 42, 0.08)" },
+          paper: { border: `1px solid ${t.border}` },
+        },
+      },
+      MuiLinearProgress: {
+        styleOverrides: {
+          root: {
+            height: 6,
+            borderRadius: 999,
+            backgroundColor: isDark ? "rgba(148,163,184,0.16)" : "rgba(15,23,42,0.07)",
+          },
+          bar: { borderRadius: 999 },
         },
       },
       MuiDataGrid: {
@@ -100,28 +140,29 @@ export function createAppTheme(mode: ColorMode) {
         },
         styleOverrides: {
           root: {
-            border: isDark ? "1px solid rgba(148,163,184,0.22)" : "1px solid rgba(15, 23, 42, 0.10)",
-            borderRadius: 12,
-            backgroundColor: isDark ? "#0f172a" : "#ffffff",
+            border: `1px solid ${t.border}`,
+            borderRadius: 10,
+            backgroundColor: t.surface,
           },
           columnHeaders: {
-            background: isDark
-              ? "linear-gradient(90deg, rgba(37,99,235,0.16) 0%, rgba(124,58,237,0.12) 60%, rgba(15,23,42,0.85) 100%)"
-              : "linear-gradient(90deg, rgba(37,99,235,0.06) 0%, rgba(124,58,237,0.05) 60%, rgba(255,255,255,0.70) 100%)",
-            borderBottom: isDark ? "1px solid rgba(148,163,184,0.20)" : "1px solid rgba(15, 23, 42, 0.10)",
+            backgroundColor: t.surfaceMuted,
+            borderBottom: `1px solid ${t.border}`,
           },
-          columnHeaderTitle: { fontWeight: 700 },
+          columnHeaderTitle: {
+            fontWeight: 600,
+            fontSize: "0.8125rem",
+            color: t.textSecondary,
+          },
           row: {
-            transition: "background-color 120ms ease",
-            "&:hover": { backgroundColor: isDark ? "rgba(37,99,235,0.10)" : "rgba(37,99,235,0.05)" },
+            "&:hover": { backgroundColor: isDark ? "rgba(148,163,184,0.06)" : "rgba(15,23,42,0.02)" },
           },
           cell: {
-            borderColor: isDark ? "rgba(148,163,184,0.12)" : "rgba(15, 23, 42, 0.06)",
+            borderColor: t.border,
             alignItems: "center",
           },
           toolbarContainer: {
-            padding: "10px 12px",
-            borderBottom: isDark ? "1px solid rgba(148,163,184,0.16)" : "1px solid rgba(15, 23, 42, 0.08)",
+            padding: "8px 12px",
+            borderBottom: `1px solid ${t.border}`,
             gap: 8,
           },
         },

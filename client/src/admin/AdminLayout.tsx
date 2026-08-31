@@ -31,7 +31,6 @@ import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
 
 import { Api } from "../api";
 import { AppShell, type NavItem } from "../layout/AppShell";
-import { StatCard } from "../components/StatCard";
 import { currency } from "../lib/format";
 import { useColorMode } from "../colorMode";
 import { AdminContext, type AdminContextValue } from "./adminContext";
@@ -118,7 +117,6 @@ export function AdminLayout({
 
   const contributionMethod: ContributionMethod = invite.initial_contribution_method ?? "defer";
   const constitutionLocked = Boolean(group?.settings?.constitution_locked_at);
-  const totalSavings = members.reduce((sum, member) => sum + Number(member.balance), 0);
   const activeLoansCount = loans.filter((loan) => loan.status === "active").length;
   const pendingRequestsCount = requests.filter((req) => req.status === "requested" || req.status === "queued").length;
 
@@ -248,7 +246,7 @@ export function AdminLayout({
 
   const header = (
     <Box display="flex" alignItems="center" gap={1} width="100%" minWidth={0}>
-      <Box minWidth={260} maxWidth={520} flex={1}>
+      <Box minWidth={0} maxWidth={{ md: 420 }} flex={1}>
         <Autocomplete
           size="small"
           options={groups}
@@ -260,24 +258,12 @@ export function AdminLayout({
           renderInput={(params) => <TextField {...params} label="Group" placeholder="Search groups..." />}
           slotProps={{
             popper: { sx: { zIndex: (t) => t.zIndex.modal + 1 } },
-            paper: { sx: { borderRadius: 2, mt: 1, border: "1px solid rgba(15, 23, 42, 0.10)" } },
-          }}
-          sx={{
-            "& .MuiOutlinedInput-root": {
-              backgroundColor: "background.paper",
-              borderRadius: 2,
-              boxShadow: "0 1px 2px rgba(15,23,42,0.06)",
-            },
+            paper: { sx: { mt: 1 } },
           }}
         />
       </Box>
-      {selectedGroupId && (
-        <Chip
-          size="small"
-          label={constitutionLocked ? "Constitution locked" : "Constitution unlocked"}
-          color={constitutionLocked ? "success" : "warning"}
-          variant={constitutionLocked ? "filled" : "outlined"}
-        />
+      {selectedGroupId && !constitutionLocked && (
+        <Chip size="small" label="Constitution not locked" color="warning" variant="outlined" />
       )}
     </Box>
   );
@@ -317,7 +303,7 @@ export function AdminLayout({
       { to: "/admin/loans", label: "Loans", icon: <CreditCardIcon />, badge: activeLoansCount },
       { to: "/admin/requests", label: "Requests", icon: <ChecklistIcon />, badge: pendingRequestsCount },
       { to: "/admin/money", label: "Money", icon: <AccountBalanceIcon /> },
-      { to: "/admin/settings", label: "Constitution", icon: <GavelIcon />, badge: constitutionLocked ? "" : "!" },
+      { to: "/admin/settings", label: "Constitution", icon: <GavelIcon />, badge: constitutionLocked ? undefined : "!" },
       // Stuck payments and unexplained balances. Carries its own count so a
       // member's money sitting in limbo is visible from every page, rather than
       // only to whoever thinks to go looking for it.
@@ -382,59 +368,6 @@ export function AdminLayout({
           <Alert severity="info">Create a group to get started.</Alert>
         ) : (
           <>
-            {!constitutionLocked && (
-              <Alert
-                severity="warning"
-                sx={{ mb: 2 }}
-                action={
-                  <Button color="inherit" size="small" onClick={() => navigate("/admin/settings")}>
-                    Review constitution
-                  </Button>
-                }
-              >
-                Lock the constitution to enable autonomous lending (members cannot request loans until it is locked).
-              </Alert>
-            )}
-
-              <Grid container spacing={2} sx={{ mb: 2 }}>
-                <Grid item xs={12} md={3}>
-                  <StatCard
-                    label="Members"
-                    value={`${members.length}`}
-                    icon={<GroupIcon color="action" />}
-                    loading={busy}
-                    helper={members.length < 5 ? "Min 5 recommended" : "Active group"}
-                  />
-                </Grid>
-                <Grid item xs={12} md={3}>
-                  <StatCard
-                    label="Total savings"
-                    value={currency(totalSavings)}
-                    icon={<DashboardIcon color="action" />}
-                    loading={busy}
-                    helper={totalSavings <= 0 ? "Start collecting to lend" : "Pool ready"}
-                  />
-                </Grid>
-                <Grid item xs={12} md={3}>
-                  <StatCard
-                    label="Active loans"
-                    value={`${activeLoansCount}`}
-                    icon={<CreditCardIcon color="action" />}
-                    loading={busy}
-                    helper={constitutionLocked ? "Autonomous lending" : "Lock to enable"}
-                  />
-                </Grid>
-                <Grid item xs={12} md={3}>
-                  <StatCard
-                    label="Pending requests"
-                    value={`${pendingRequestsCount}`}
-                    icon={<ChecklistIcon color="action" />}
-                    loading={busy}
-                    helper={constitutionLocked ? "Auto decisions on" : "Requests open after lock"}
-                  />
-                </Grid>
-              </Grid>
-
             <Outlet />
           </>
         )}
